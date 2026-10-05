@@ -21,7 +21,7 @@
 #define SRAM_PTR(a) (a)
 #endif
 #define BASE ((uint16_t *)SRAM_PTR(0xbd00u))
-#define TURN_MIN 40u /* real frames: a few views, while the silhouette fills in */
+#define TURN_MIN 24u /* real frames: a few views, while the silhouette fills in */
 #define TURN_MAX 300u /* five seconds at most (real frames, not loop turns: a busy frame never stretches it) */
 #define TILE 32u /* the fusion's third slot: the result's sprite tiles */
 #define STAGE_X 64u /* crucible.c's STAGE_X-16, STAGE_Y-16 */
@@ -42,6 +42,13 @@ static uint8_t rnd(void) {
   seed ^= seed >> 5;
   seed ^= seed << 1;
   return seed;
+}
+/* Recipe-aware prefetch while choosing the second ingredient: invisible, lower priority than visible art. */
+void reveal_predict(uint16_t a, uint16_t b) BANKED {
+  uint16_t id;
+  if (a >= core.items || b >= core.items) return;
+  id = cru_recipe(&core, a, b);
+  if (id < core.items) (void)crucible_art_ready(id, 1, 70u);
 }
 void reveal_prepare(uint16_t id, uint8_t v) BANKED {
   reveal_id = id;

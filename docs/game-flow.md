@@ -152,7 +152,7 @@ its turntable has been decoded, with no material overlay on the reveal. `crucibl
    through views already decoded, so the turn widens as the turntable fills in (asking the decoder for a view behind
    its position would restart its stream). Both decoders run at full rate: two urgent art ticks and two overlay steps a
    frame, the base turntable and, ahead of time, its material overlay (`crucible_overlay_ahead`). The turn lasts at
-   least 40 real frames and until both are resident, capped at 300 real frames (5 s; it never hangs).
+   least 24 real frames and until both are resident, capped at 300 real frames (5 s; it never hangs).
 3. **The flash**, then the reveal: its cell is marked ready the moment it is set (a cached loop plays from its first
    frame), and the overlay runs on the reveal for that one cell (OAM 13..17; the burst keeps 0..11), turning with the
    base frames.
@@ -161,11 +161,16 @@ Measured with `test/harness/capture_discoveries.py` (24 mixes): every reveal tur
 advances 0, 1, 2... at the turn speed) with the overlay's sprites present by its third frame (steam has no material
 layer). The switch to the reveal also commits the save and draws the scene, about 14 frames under the white flash.
 
-**The cost is time.** Decoding a turntable is slow on the SM83 (the bench's own focus loads take 100 to 300 frames), so
-a new discovery's merge is longer: the fuse and alternation take about 220 frames, then the turn about 45
-frames when the result was already cached and 120 to 300 frames when it was not (2 to 5 s more). Decoding during the
-fuse instead slowed the fusion by the same amount. An object reaching the 5 s cap reveals with its decoded views only.
-Bank cost: `crucible` -17 bytes, `crucible_reveal` +960 (new), `crucible_overlay` +200.
+The merge uses elapsed VBlank time, shorter holds and exact lookup tables for the original fusion geometry. While
+choosing the second ingredient, the likely recipe result is prepared in the background; result jobs preempt lower
+priority art, and the approach and alternation also decode ahead. The reveal still waits for both turntables.
+In an isolated emulator comparison, FIRE + WATER reached its first discovery reveal in 154 frames instead of 376;
+repeating it reached the bench in 47 instead of 133. WATER + STEAM (no recipe) took 79 instead of 127. These are
+sample timings, including the input and screen transition, not a bound for every cold object.
+
+Music keeps its melody and bass channels throughout merges, reveals, talk and fight cues. Effects use pulse 1 and
+noise over the score. Object voices stir the music's own seed and temporarily change the lead octave and duty,
+without changing gameplay randomness or lowering the music volume. Music and SFX retain independent volume controls.
 
 ## Link
 

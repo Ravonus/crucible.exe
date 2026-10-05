@@ -4,8 +4,8 @@
  * pulse 2, the cabinet's pad wave as a gated bass, and noise snares, claps, hats and risers. Songs follow the screen,
  * the clock and the story (pick_song), change on a short gap, keep the screen's time, and swap sections for their
  * alternates from their own seed so long play does not repeat exactly.
- * Effects run on note lists (pulse 1, pulse 2, noise) and always win their channel: the music keeps time under them
- * and plays its other channels softer (duck) until they end.
+ * Effects use pulse 1 and noise; pulse 2 and wave keep the melody and bass audible. Actions also stir the music
+ * seed and briefly vary the lead octave and duty, without resetting the score or lowering its volume.
  * Every object has a voice: a four-note motif from its id and a timbre from its category, so focusing,
  * picking, merging and revealing it sound like that object, and every discovery fanfare is its own. */
 #pragma bank 255
@@ -105,6 +105,7 @@ static void start(uint8_t ch) {
 static const uint8_t workshop_scale[5] = {0, 2, 3, 7, 9};
 static uint8_t mood, root, music_level, sfx_off, wave_left;
 static uint16_t seed;
+static uint8_t reaction_left, reaction_octave, reaction_duty;
 /* wave output level: full music at 50%, soft music at 25% (NR32 bits 6-5) */
 #define BED(level) (music_level ? 0x60u : (level))
 static uint8_t rnd(void) {
@@ -113,30 +114,21 @@ static uint8_t rnd(void) {
   seed ^= seed << 8;
   return (uint8_t)seed;
 }
-static void wave(uint8_t note, uint8_t level) {
-  uint16_t hz;
-  if (note > 35u) note = 35u;
-  hz = notes[note + 12u];
-  NR32_REG = level;
-  NR33_REG = (uint8_t)hz;
-  NR34_REG = 0x80u | (uint8_t)(hz >> 8);
-}
 /* ---- the soundtrack ---- */
 #define M_OFF 0u
 #define M_PLAY 1u
 #define M_OUT 2u /* fading the song out (it keeps playing) before the next one comes in on a beat */
 #define M_WAIT 3u /* a short wait before the first song (the screen's scene arrives in this frame) */
 #define G_FULL 16u /* fade gain: 0..16 */
-#define DUCK_HOLD 24u /* frames the music stays ducked after an effect (talk blips do not make it pump) */
 uint8_t music_force; /* a test harness may pick a SONG_* here (255: the game picks) */
 static uint16_t m_seed, m_heard, m_last;
 static const uint8_t *m_s, *m_sec, *m_p[4];
 static uint8_t m_state, m_scene, m_song, m_want, m_t, m_wave, m_pan, m_span, m_frames, m_night, m_wraps, m_clock, m_row,
     m_bar, m_order;
 /* volume: m_vol the MUSIC setting (0..8), m_gain the fade ramp toward m_goal (a step every m_rate frames), m_k the
- * scale every hit gets (0..128 = vol*gain, about a third while an effect plays or just played), m_bassl the held bass's
+ * scale every hit gets (0..128 = vol*gain), m_bassl the held bass's
  * level (rescaled as the ramp moves) */
-static uint8_t m_vol, m_gain, m_goal, m_rate, m_rt, m_k, m_hold, m_bassl, m_fast;
+static uint8_t m_vol, m_gain, m_goal, m_rate, m_rt, m_k, m_bassl, m_fast;
 static void load_wave(uint8_t w) {
   uint8_t i;
   const uint8_t *p = km_wave + (uint8_t)(w << 4);
@@ -147,9 +139,9 @@ static void load_wave(uint8_t w) {
 }
 static void set_k(void) {
   uint8_t k = (uint8_t)(m_vol * m_gain);
-  if (m_hold) k = (uint8_t)((k >> 2) + (k >> 4));
+  /* Effects keep the bed at its chosen volume; quantized wave gain must never duck to zero. */
   m_k = k;
-} /* under an effect: -10 dB */
+}
 /* an envelope at the music's volume (a scaled start volume keeps its pace) */
 static uint8_t scale(uint8_t e) {
   uint8_t v = (uint8_t)(((uint16_t)(e >> 4) * m_k + 64u) >> 7);
@@ -199,6 +191,7 @@ static void play(uint8_t c, const uint8_t *e) {
       NR12_REG = 0;
     return;
   }
+  if (c == 1u && reaction_left && n + reaction_octave < 72u) n += reaction_octave;
   x = km_period[n];
   if (c == 0u) {
     NR10_REG = in[0];
@@ -207,7 +200,7 @@ static void play(uint8_t c, const uint8_t *e) {
     NR13_REG = (uint8_t)x;
     NR14_REG = (uint8_t)(0x80u | in[3] | (uint8_t)(x >> 8));
   } else {
-    NR21_REG = in[1];
+    NR21_REG = reaction_left ? (uint8_t)((in[1] & 63u) | (reaction_duty << 6)) : in[1];
     NR22_REG = scale(in[2]);
     NR23_REG = (uint8_t)x;
     NR24_REG = (uint8_t)(0x80u | in[3] | (uint8_t)(x >> 8));
@@ -290,7 +283,7 @@ static void music_stop(void) {
   }
 }
 static void music_go(void) {
-  if (!m_vol || !(mood == 1u || mood == 2u)) {
+  if (!m_vol) {
     music_stop();
     return;
   }
@@ -341,6 +334,7 @@ static void row_tick(void) {
 static void music_tick(void) {
   uint8_t p, e = (uint8_t)(sys_time - m_last), k;
   m_last = sys_time;
+  if (reaction_left) reaction_left = reaction_left > e ? (uint8_t)(reaction_left - e) : 0u;
   if (e > 8u) e = 8u;
   if (wave_left && !--wave_left) {
     NR32_REG = 0;
@@ -365,12 +359,8 @@ static void music_tick(void) {
     row_tick();
     return;
   }
-  /* the duck: while an effect plays and DUCK_HOLD frames after; the fade ramp */
-  k = m_hold;
-  if (at[0] || at[1] || at[2])
-    m_hold = DUCK_HOLD;
-  else if (m_hold)
-    m_hold = m_hold > e ? (uint8_t)(m_hold - e) : 0u;
+  /* Fade ramps belong to song changes, independently of effects. */
+  k = m_gain;
   if (m_gain != m_goal && (m_rt = m_rt > e ? (uint8_t)(m_rt - e) : 0u) == 0u) {
     m_rt = m_rate;
     if (m_gain < m_goal)
@@ -379,7 +369,7 @@ static void music_tick(void) {
       m_gain--;
     k = 255u;
   }
-  if (k != m_hold) {
+  if (k != m_gain) {
     set_k();
     if (m_bassl && !wave_left) NR32_REG = wave_level(m_bassl);
   } /* the held bass follows the volume */
@@ -390,14 +380,6 @@ static void music_tick(void) {
     row_tick();
   }
   if (m_clock >= m_frames) m_clock = 0;
-}
-/* an effect starts: duck at once (the main loop may not tick the music for a few frames while art decodes); the held
- * bass drops with it, the hits already ringing decay under the effect */
-static void duck_now(void) {
-  if (m_state == M_OFF) return;
-  m_hold = DUCK_HOLD;
-  set_k();
-  if (m_bassl && !wave_left) NR32_REG = wave_level(m_bassl);
 }
 void music_mood(uint8_t m) BANKED {
   if (m == mood) return;
@@ -424,8 +406,10 @@ void sound_options(uint8_t o) BANKED {
   music_go();
   if (sfx_off) {
     for (ch = 0; ch < 3u; ch++) {
-      at[ch] = 0;
-      silence(ch);
+      if (at[ch]) {
+        at[ch] = 0;
+        silence(ch);
+      }
     }
   }
 }
@@ -461,18 +445,19 @@ static void voice_list(uint8_t ch, uint16_t id, uint8_t category, uint8_t from, 
 void sound_voice(uint16_t id, uint8_t category, uint8_t kind, uint8_t from) BANKED {
   if (sfx_off) return;
   pitch = 0;
-  duck_now();
+  /* The music has its own deterministic stream: actions colour upcoming notes and section choices. */
+  m_seed ^= (uint16_t)(id * 0x9e37u) ^ ((uint16_t)category << 8) ^ kind;
+  if (!m_seed) m_seed = 1u;
+  reaction_left = kind == 2u ? 192u : 96u;
+  reaction_octave = kind == 2u || (motif(id, from) & 1u) ? 12u : 0u;
+  reaction_duty = category & 3u;
   if (kind == 0u)
     voice_list(0, id, category, 0, 1, 12, 4, 4);
   else if (kind == 1u)
     voice_list(0, id, category, 0, 2, 12, 4, 8);
   else if (kind == 2u) {
     voice_list(0, id, category, 0, 4, 12, 9, 36);
-    voice_list(1, id, category, 1, 4, 0, 9, 36);
-    if (music_level != 2u) {
-      wave(root, BED(0x40u));
-      wave_left = 63u;
-    }
+    /* Single pulse fanfare leaves the score melody and bass playing. */
   } else if (kind == 3u)
     voice_list(0, id, category, 0, 3, 12, 6, 16);
   else if (kind == 4u)
@@ -481,9 +466,9 @@ void sound_voice(uint16_t id, uint8_t category, uint8_t kind, uint8_t from) BANK
     voice_list(0, id, category, from & 3u, 1, (uint8_t)(12u + ((from >> 2) & 1u) * 12u), 3, 3);
   else if (kind == 7u) {
     uint8_t l = (uint8_t)(1u + ((from >> 5) & 3u));
-    voice_list(1u, id, category, from & 7u, 1, (uint8_t)(12u + ((from >> 3) & 3u) * 6u), l, l);
+    voice_list(0u, id, category, from & 7u, 1, (uint8_t)(12u + ((from >> 3) & 3u) * 6u), l, l);
   } else { /* feat chime: rising modal notes, one note longer per tier */
-    uint8_t i, *o = vbuf[1];
+    uint8_t i, *o = vbuf[0];
     uint16_t hz;
     for (i = 0; i < from + 3u && i < 6u; i++) {
       hz = notes[root + 24u + workshop_scale[i % 5u] + (i / 5u) * 12u];
@@ -493,8 +478,8 @@ void sound_voice(uint16_t id, uint8_t category, uint8_t kind, uint8_t from) BANK
       *o++ = (uint8_t)((1u << 6) | (hz >> 8));
     }
     *o = 0;
-    at[1] = vbuf[1];
-    start(1);
+    at[0] = vbuf[0];
+    start(0);
   }
 }
 void sound_init(void) BANKED {
@@ -506,7 +491,8 @@ void sound_init(void) BANKED {
   m_s = 0;
   m_state = M_OFF;
   wave_left = 0;
-  m_bassl = m_hold = 0;
+  reaction_left = reaction_octave = reaction_duty = 0;
+  m_bassl = 0;
   m_gain = G_FULL;
   m_span = 0xffu;
   m_wave = 255u;
@@ -553,22 +539,26 @@ void sound_play(uint8_t id) BANKED {
     at[2] = s->ch4;
     start(2);
   }
-  duck_now();
 }
 /* Fusion climbs through the same mode as the ingredients, with a finite tail. */
 void sound_drone(uint8_t step) BANKED {
-  uint8_t degree;
-  if (sfx_off || music_level == 2u) return;
-  degree = step >> 1;
-  wave((uint8_t)(root + workshop_scale[degree % 5u] + (degree / 5u) * 12u), BED(0x40u));
-  wave_left = 18u;
+  if (sfx_off) return;
+  /* Let the ingredient answer the bass, without replacing the bass channel. */
+  voice_list(0, step, reaction_duty, step >> 1, 1, 0, 3, 3);
+  reaction_left = 96u;
+  m_seed ^= (uint16_t)(step + 1u) << 8;
 }
 void sound_tick(void) BANKED {
-  uint8_t ch;
-  for (ch = 0; ch < 3u; ch++)
-    if (at[ch] && !--left[ch]) {
+  uint8_t ch, elapsed = (uint8_t)(sys_time - m_last), e;
+  if (elapsed > 8u) elapsed = 8u;
+  for (ch = 0; ch < 3u; ch++) {
+    e = elapsed;
+    while (at[ch] && e >= left[ch]) {
+      e -= left[ch];
       at[ch] += 4;
       start(ch);
     }
+    if (at[ch]) left[ch] -= e;
+  }
   music_tick();
 }

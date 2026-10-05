@@ -1,8 +1,8 @@
 #ifndef CRUCIBLE_TIME_H
 #define CRUCIBLE_TIME_H
 /* Time awareness (crucible_time.c). The cartridge is MBC5: there is no real-time clock. The player is asked the date
- * and time once, when a game is first started from PLAY (never on the title card); a host (the website's emulator) may
- * instead leave a HOST CLOCK block in SRAM before power-on, which is used silently. While the cartridge runs, the clock
+ * and time for each new story game (never for free play or a resumed run); each story slot owns its answers. A host
+ * (the website's emulator) may leave a HOST CLOCK block for Classic in SRAM before power-on, used silently. While the cartridge runs, the clock
  * and the calendar advance by counting VBlanks (4389/262144 s each: exactly 70224 clocks at 4.194304 MHz, 59.7275 Hz).
  * Without a host clock, time away is unknown (the clock resumes where it stopped) and nothing reacts to it.
  * See docs/time-awareness.md (the SRAM records and the HOST CLOCK block are in bank 15). */
@@ -69,8 +69,8 @@ typedef struct crucible_time_ctx {
 
 /* The HOST CLOCK block a host writes before power-on (time-awareness.md): SRAM bank 15 offset 0x1FE0, 16 bytes */
 #define CT_HOST_AT 0x1ffe0ul
-/* the ask pages (crucible_menu.c): the date and time once (CT_ASK_FIRST, when a game is first started), or from SETUP
- * (CT_ASK_ADJUST, a correction); the birthday once, beside it */
+/* the ask pages (crucible_menu.c): the date and time for a new run (CT_ASK_FIRST), or from SETUP
+ * (CT_ASK_ADJUST, a correction); the birthday for that run, beside it */
 #define CT_ASK_DONE 0u
 #define CT_ASK_FIRST 1u
 #define CT_ASK_ADJUST 3u
@@ -88,6 +88,8 @@ typedef struct crucible_time_ctx {
 #define CT_MENU_LEAVE 2u /* it passed: redraw, restore */
 #define CT_MENU_MINUTE 3u /* an ordinary minute turned (SETUP's clock row) */
 
+void time_new_game(uint8_t slot) BANKED; /* fresh run: independent clock and asks */
+void time_free_play(void) BANKED; /* restore Classic clock, without a prompt */
 void time_poll(void) BANKED; /* any frame; counts VBlanks since the last call */
 uint8_t time_ask_mode(void) BANKED; /* CT_ASK_FIRST when a game start should ask the date and time */
 uint8_t time_birthday_due(void) BANKED; /* 1 when a game start should ask the birthday */

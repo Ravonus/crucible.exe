@@ -1,15 +1,15 @@
 /* Time awareness without a clock chip (see crucible_time.h and docs/time-awareness.md).
  *
- * The date and time are asked once, when a game is first started from PLAY (crucible_menu.c), never on the title card;
- * or a host (the website's emulator) writes a HOST CLOCK block into SRAM before power-on, used silently (and consumed).
+ * Each new story game asks the date and time (crucible_menu.c); free play and resumed runs never ask. Each slot
+ * owns its clock. A host may set the Classic clock before power-on, used silently (and consumed).
  * VBlanks keep the clock and the calendar going while the cartridge runs; switched off, the clock stops, so without a
  * host clock the time away is unknown (CT_AWAY_UNKNOWN) and nothing reacts to it. Effects are whispers (a card on the
  * bench, drawn by crucible_feats.c), the pause menu at a special minute (crucible_menu.c), quiet leanings in a story
  * run's saga (lucidity and the truth matrix), and a talk called in at an angel minute (crucible_flow.c), never explained.
  *
- * SRAM: two 32-byte records in bank 15 at 0x1F80 (A) and 0x1FA0 (B), linear 0x1FF80 / 0x1FFA0, above the eggs
- * (0x1F00..0x1F06) and the story record (0x1D00..0x1DB7); the host's 16-byte block at 0x1FE0 (linear 0x1FFE0). Neither
- * save, the slot wipes nor RESET GAME write there. Each record write invalidates the commit byte first and sets it last;
+ * SRAM: each clock has two 32-byte records. Classic keeps bank 15 offsets 0x1F80 / 0x1FA0; story slots use
+ * linear 0x1FE40, 0x03F80 and 0x07F80 (RUN_CLOCK). The host block is at 0x1FFE0. These are outside player,
+ * story, eggs and Classic saves; slot wipes do not touch them. New games explicitly replace their clock. Each record write invalidates the commit byte first and sets it last;
  * the newer valid record by wrapping serial wins. Version 1 records (minute of the week) are read and migrated. */
 #pragma bank 255
 #include <gb/gb.h>
@@ -22,6 +22,9 @@
 
 #define CT_REC_A 0x1ff80ul
 #define CT_REC_B 0x1ffa0ul
+static uint32_t record_at = CT_REC_A;
+static uint8_t clock_slot = 255u;
+static const uint32_t RUN_CLOCK[3] = {0x1fe40ul, 0x03f80ul, 0x07f80ul};
 #define CT_REC_BYTES 32u
 #define CT_COMMIT 27u
 #define CT_COMMITTED 0xc7u
@@ -55,6 +58,8 @@ static uint8_t pending_, w_ret_, w_sp_, w_mar_, once_, story_mask_, menu_sp_, ca
 static uint16_t serial_, mod_, date_, sess_min_, last_day_, returns_, last_vbl_, report_min_, next_mar_, w_sp_mod_,
     menu_mod_, act_mod_, act_date_, cdate_ = 0xffffu;
 static uint32_t frac_, total_;
+static uint8_t calm_need_ = 120u;
+static uint16_t calm_at_;
 
 /* ---- portable rules (pure C, testable on a host) ---- */
 static uint8_t ct_part(uint8_t hour) {
@@ -172,8 +177,13 @@ static void load_(void) {
   date_ = CT_DEFAULT_DATE;
   mod_ = CT_DEFAULT_MOD;
   reported_ = CT_AWAY_UNKNOWN;
-  read_(CT_REC_A, a, CT_REC_BYTES);
-  read_(CT_REC_B, b, CT_REC_BYTES);
+  read_(record_at, a, CT_REC_BYTES);
+  read_(record_at + CT_REC_BYTES, b, CT_REC_BYTES);
+  /* Existing runs inherit the legacy clock once; subsequent changes belong to their slot. */
+  if (clock_slot != 255u && ct_latest(a, b) == 255u) {
+    read_(CT_REC_A, a, CT_REC_BYTES);
+    read_(CT_REC_B, b, CT_REC_BYTES);
+  }
   at_ = ct_latest(a, b);
   if (at_ != 255u) {
     r = at_ ? b : a;
@@ -204,7 +214,7 @@ static void load_(void) {
   /* a host's clock, left before power-on: used silently, then consumed (the host writes a fresh one each boot) */
   read_(CT_HOST_AT, a, 16u);
   hd = ct_host(a, &hm, &hs);
-  if (hd != 0xffffu) {
+  if (clock_slot == 255u && hd != 0xffffu) {
     away = ((int32_t)hd - (int32_t)date_) * CT_DAY_MIN + (int32_t)hm - (int32_t)mod_;
     if ((flags_ & CT_KNOWN) && away >= 0) {
       reported_ = ct_bucket((uint32_t)away);
@@ -256,7 +266,7 @@ static void persist_(void) {
   r[CT_COMMIT] = CT_COMMITTED;
   put16_(r + 30, ct_crc(r, 30u));
   at_ = at_ == 0u ? 1u : 0u;
-  to = at_ ? CT_REC_B : CT_REC_A; /* never over the newest valid record */
+  to = record_at + (at_ ? CT_REC_BYTES : 0u); /* never over the newest valid record */
   crucible_sram_write(0, to + CT_COMMIT, 0);
   for (i = 0; i < CT_REC_BYTES; i++)
     if (i != CT_COMMIT) crucible_sram_write(0, to + i, r[i]);
@@ -385,7 +395,42 @@ uint8_t time_angel_take(void) BANKED {
   return a;
 }
 
-/* ---- the asks: the date and time, then the birthday; once, at the first game start ---- */
+/* Each run owns its clock, birthday and time effects. The Classic clock stays in its legacy records. */
+static void switch_clock(uint8_t slot, uint8_t fresh) {
+  time_poll();
+  persist_();
+  clock_slot = slot < 3u ? slot : 255u;
+  record_at = clock_slot == 255u ? CT_REC_A : RUN_CLOCK[clock_slot];
+  loaded_ = at_ = flags_ = sec_ = streak_ = best_ = quick_ = long_ = prev_part_ = special_ = host_ = bmon_ = bday_ = 0;
+  pending_ = w_ret_ = w_sp_ = w_mar_ = once_ = story_mask_ = menu_sp_ = calm_ = roll_ = angel_ = act_set_ = 0;
+  serial_ = mod_ = date_ = sess_min_ = last_day_ = returns_ = report_min_ = w_sp_mod_ = menu_mod_ = act_mod_ =
+      act_date_ = 0;
+  frac_ = total_ = 0;
+  cdate_ = 0xffffu;
+  calm_need_ = 120u;
+  calm_at_ = 0;
+  last_vbl_ = sys_time;
+  if (fresh) {
+    loaded_ = 1;
+    at_ = 255u;
+    date_ = CT_DEFAULT_DATE;
+    mod_ = CT_DEFAULT_MOD;
+    reported_ = CT_AWAY_UNKNOWN;
+    next_mar_ = 120u;
+    /* A replaced slot must not reload the previous run's clock after a restart. */
+    crucible_sram_write(0, record_at + CT_COMMIT, 0);
+    crucible_sram_write(0, record_at + CT_REC_BYTES + CT_COMMIT, 0);
+    persist_();
+  } else {
+    load_();
+    last_vbl_ = sys_time;
+  }
+}
+void time_new_game(uint8_t slot) BANKED { switch_clock(slot, 1); }
+void time_free_play(void) BANKED {
+  if (clock_slot != 255u) switch_clock(255u, 0);
+}
+/* The asks belong only to a new story game; its birthday follows the date page. */
 uint8_t time_ask_mode(void) BANKED {
   time_poll();
   return (flags_ & (CT_KNOWN | CT_ASKED)) ? CT_ASK_DONE : CT_ASK_FIRST;
@@ -525,8 +570,6 @@ static uint8_t pick_(uint8_t n) {
 /* Called by feats_toast every pass with whether a card may show: a whisper waits for two calm seconds on the bench
  * (counted in VBlanks: a busy bench runs fewer passes than frames), and four after another one. A special minute's
  * whisper is dropped once its minute has passed. */
-static uint8_t calm_need_ = 120u;
-static uint16_t calm_at_;
 uint8_t time_whisper_ready(uint8_t allowed) BANKED {
   time_poll();
   if ((pending_ & W_SPECIAL) && w_sp_mod_ != mod_) pending_ &= (uint8_t)~W_SPECIAL;
@@ -622,6 +665,7 @@ uint8_t time_menu_special(void) BANKED {
 /* A run opened. The absence reaches each slot once a power-on, and only a resumed run (a new one was not waiting).
  * Coming straight back leans "the same thing again"; a long time away leans idleness and clears the head a little. */
 void time_story_opened(uint8_t slot, uint8_t resumed) BANKED {
+  if (clock_slot != slot) switch_clock(slot, 0);
   crucible_story *s = saga_();
   uint8_t bit = (uint8_t)(1u << (slot & 7u));
   if (!s || (story_mask_ & bit)) return;

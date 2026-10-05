@@ -6,8 +6,8 @@
  * Settings live in the save (the core's options byte) and apply at once; leaving settings saves them. RESET GAME asks
  * for A to be held two seconds, erases progress (cru_reset) and restarts the cartridge.
  * Names live with the three story slots: given when a run wakes, changed with SELECT on the slot list.
- * The first time a game is started from PLAY (story or free play; not a link session), it asks the date and time
- * (crucible_time.c: no clock chip, unless a host left one in SRAM) and the player's birthday, once each, then a brief
+ * Each new story game asks the date and time (crucible_time.c: no clock chip) and the player's birthday.
+ * Free play, link sessions and resumed runs never ask. Each slot keeps its own answers, then a brief
  * loader shows the player's sign mark (crucible_sky.c, run by crucible.c). Never on the title card. */
 #pragma bank 255
 #include <gb/gb.h>
@@ -392,8 +392,15 @@ static void time_page(uint8_t mode) {
   page = PAGE_TIME;
   at = 0;
 }
-/* a game start (MENU_FREE / MENU_STORY_*): the date and time, then the birthday, once each; then the game */
+/* A new story game asks its date and birthday; loading and free play enter directly. */
 static uint8_t start(uint8_t k) {
+  /* Loading and free play have no asks. Re-entry from an ask keeps this new game's clock. */
+  if (k != MENU_STORY_NEW) {
+    pend = 0;
+    cursor(255u);
+    return k;
+  }
+  if (pend != k) time_new_game(menu_slot);
   if (time_ask_mode() != CT_ASK_DONE) {
     pend = k;
     time_page(CT_ASK_FIRST);

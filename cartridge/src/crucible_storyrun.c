@@ -114,6 +114,7 @@ void story_leave(void) BANKED {
   story_save();
   story_on = 0;
   talk_saga_reset();
+  time_free_play();
   save_boot();
 }
 /* The run lost for good: its slot is wiped, and free play returns. */
@@ -126,6 +127,7 @@ void story_end(void) BANKED {
   story_on = 0;
   wipe(story_slot_at);
   talk_saga_reset();
+  time_free_play();
   save_boot();
 }
 uint16_t story_lost(void) BANKED { return lost_; }

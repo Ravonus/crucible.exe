@@ -6,9 +6,9 @@ director's flow state, the header and cue rows).
 
 Phases (all by default; --phases picks some, in the order given):
   menu     the title and pause menus over many boot timings: never TALK, never FIGHT
-  free     a new player: the title (it asks nothing), PLAY > FREE PLAY, the date and time ask and the birthday ask
-           at that first game start, the sign loader, the first bench (cue rows), the filter flow (SELECT, pick with
-           A, the header shows it, B clears it; SELECT on the filter screen clears it), the first mix and discovery,
+  free     a new player: the title (it asks nothing), PLAY > FREE PLAY without any date or birthday ask,
+           the sign loader, the first bench (cue rows), the filter flow (SELECT, pick with A, the header shows it,
+           B clears it; SELECT on the filter screen clears it), the first mix and discovery,
            the book, TITLES, STATS, SETUP; then 100+ discoveries (the living rooms unlock at 64) and the browse probe
            (every focus's animation finishes loading, no stalls); its save is kept for 'return'
   story    a story run: the bench, the pause menu and LEAVE, encounters arriving in play (forced and waiting, talk
@@ -682,8 +682,8 @@ def free_first_bench(g: Game) -> None:
     g.step(20)
     asks = g.asks(shots=True, birthday=BIRTHDAY)
     g.ctx.check(
-        "free: the first game start asks the date and time, then the birthday",
-        asks == ["date", "birthday"],
+        "free: no date or birthday ask",
+        asks == [],
         str(asks),
     )
     g.wait_screen(BENCH, 3000)

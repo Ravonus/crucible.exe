@@ -314,9 +314,9 @@ void crucible_art_tick(void) BANKED {
   if (busy) {
     /* a background chain (prefetch) gives way at once to anything on screen: its frames so far stay cached, and it
    * goes back in the queue to finish later */
-    if (job.priority < 60u) {
+    if (job.priority < 125u) {
       for (i = 0; i < nj; i++)
-        if (jobs[i].priority >= 80u) {
+        if (jobs[i].priority >= 125u || (job.priority < 60u && jobs[i].priority >= 80u)) {
           request r = job;
           busy = 0;
           enqueue(r.id, r.frame, r.priority);

@@ -24,6 +24,7 @@
 #include "crucible_room.h"
 #include "crucible_flow.h"
 #include "crucible_sky.h"
+void reveal_predict(uint16_t a, uint16_t b) BANKED;
 void reveal_prepare(uint16_t id, uint8_t variant) BANKED; /* crucible_reveal.c: the result turns out of the glitch */
 uint8_t reveal_turn(void) BANKED;
 #define REPEAT_DELAY 15u
@@ -57,7 +58,7 @@ enum {
 enum { CA, CB, CR, CL, CF, CN, CELLS };
 static const uint8_t bench_x[CELLS] = {1, 8, 15, 2, 8, 14}, bench_y[CELLS] = {4, 4, 4, 10, 10, 10},
                      cell_pal[CELLS] = {1, 5, 3, 4, 5, 4};
-static const uint8_t holds[4] = {6, 4, 3, 2};
+static const uint8_t holds[4] = {3, 2, 2, 1};
 static const uint16_t WHITE = 0x7fffu, DUSK = (14u | (8u << 5) | (22u << 10));
 /* holographic: glow silhouettes cyan to white; sparks cyan, white and magenta */
 static const uint16_t GLOW[4] = {0, (8u | (25u << 5) | (31u << 10)), 0x7fffu, 0x7fffu},
@@ -816,6 +817,7 @@ static void bench_view(void) {
   field(1, 15, 18, label, T_CREAM);
   flow_sign(v.message, v.sign);
   crucible_art_cursor(core.focus, 0);
+  reveal_predict(core.slot_a, core.focus);
   for (c = 0; c < CELLS; c++) cell_set(c, v.kind[c], v.id[c], c == CF, 1);
   {
     uint16_t ids[CELLS];
@@ -856,8 +858,8 @@ static void begin_merge(void) {
   mix_b = core.mix.b;
   result = core.mix.result;
   outcome = core.mix.outcome;
-  merge_fuse = outcome == CRU_NEW ? 48u : outcome == CRU_ROUTE ? 28u : 24u;
-  appr = 14u;
+  merge_fuse = outcome == CRU_NEW ? 24u : outcome == CRU_ROUTE ? 18u : 12u;
+  appr = 8u;
   /* the merge starts from each object's keyframe: no stream to decode, so the mix never stalls */
   crucible_art(CRUCIBLE_ART_KEY, mix_a, 0, 0, VARIANT(mix_a), 0, 255u, CRUCIBLE_ART_CAPTURE);
   crucible_art(CRUCIBLE_ART_KEY, mix_b, 0, 0, VARIANT(mix_b), 16, 255u, CRUCIBLE_ART_CAPTURE);
@@ -942,7 +944,7 @@ static void draw_reveal(void) {
 static void finish_merge(void) { awarded = cru_mix_finish(&core); }
 /* Timeline in real frames (sys_time), so a slow render step skips poses instead of slowing the merge. */
 /* alternation: holds 6,4,3,2 plus 1..4 swaps of 4 frames each */
-#define ALT_FRAMES 55u
+#define ALT_FRAMES 28u
 static uint16_t prev_t;
 static uint8_t crossed(uint16_t at) { return prev_t < at && t >= at; }
 static void tick_merge(void) {
@@ -962,6 +964,10 @@ static void tick_merge(void) {
   else if (t < end_alt)
     fade(11, DUSK, 0, 0);
   if (t <= A) {
+    if (outcome == CRU_NEW || outcome == CRU_ROUTE) {
+      crucible_art_urgent = 1;
+      crucible_art_tick();
+    }
     place_pair((int16_t)ease(8, STAGE_X - 32u, (uint8_t)t, A), (int16_t)ease(64, STAGE_X, (uint8_t)t, A), 32);
     return;
   }
@@ -1031,6 +1037,9 @@ static void tick_merge(void) {
   }
   if (t < end_alt) {
     /* Fused body and new form alternate as glowing silhouettes: holds shrink while bursts lengthen. */
+    crucible_art_urgent = 1;
+    crucible_art_tick();
+    (void)crucible_overlay_ahead(result);
     k = (uint8_t)(t - end_fuse);
     used = 0;
     show_new = 0;
@@ -1045,15 +1054,15 @@ static void tick_merge(void) {
       swaps = round + 1u;
       if (k < used + holds[round]) break;
       used += holds[round];
-      if (k < used + swaps * 4u) {
-        j = (uint8_t)((k - used) / 2u);
+      if (k < used + swaps * 2u) {
+        j = (uint8_t)((k - used));
         show_new = (j & 1u) == 0u;
-        if (crossed(end_fuse + used + j * 2u))
+        if (crossed(end_fuse + used + j))
           sound_voice(show_new ? result : mix_a, crucible_category(show_new ? result : mix_a), 5,
                       (uint8_t)(round * 4u + j));
         break;
       }
-      used += swaps * 4u;
+      used += swaps * 2u;
     }
     if (show_new) {
       fusion_place(2, STAGE_X - 16u, STAGE_Y - 16u, 3);
@@ -1476,8 +1485,8 @@ void crucible_run(void) BANKED {
     clock++;
     if (screen == MERGE) {
       prev_t = t;
-      if (t) t += dt > 2u ? 2u : dt;
-    } /* a slow frame slows the merge, never skips it */
+      if (t) t += dt;
+    } /* real elapsed frames: decoding never stretches the choreography */
     /* the turntable runs on real time (frames elapsed), one view per step, so a busy frame never slows it */
     rot_clock = (uint8_t)(rot_clock + dt);
     if (rot_clock >= turn_ticks[(core.options >> 3) & 3u]) {

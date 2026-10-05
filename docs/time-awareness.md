@@ -10,16 +10,14 @@ Code: `cartridge/src/crucible_time.c` and `cartridge/include/crucible_time.h`.
 The cartridge is MBC5 with RAM and a battery (`tools/build-rom.ts` links with `-Wm-yt0x1B`, `-Wm-ya16`, an 8 MiB ROM). MBC5
 has no real-time clock. MBC3+RTC tops out at 2 MiB of ROM, so it is not an option. So:
 
-- **The date and time are asked once, at the first game start.** Never on the title card. The first time a story run
-  or free play is started from PLAY on a cartridge whose clock was never set, the menu asks **WHAT IS TODAY?**: month,
-  day, year, hour and minute (LEFT/RIGHT a field, UP/DOWN its value, A keeps it, B skips). Then it asks the player's
-  **birthday** (month and day, no year; B skips), then the sign loader runs and the game opens. Neither is asked again:
-  a skipped clock stays unset (time-of-day effects stay off) until SETUP > TIME sets it; a skipped birthday means no
-  sign. A link session (PLAY > LINK) never asks. The answers are kept in the battery save (the records below).
-- **A host may set the clock instead.** A host (the website's emulator) can write a **HOST CLOCK** block into SRAM
-  before power-on (format below). A valid block is used silently: no date or time is ever asked, the clock is set to
-  it exactly, and the time since the last session is real. The block is consumed at boot (its first byte is cleared),
-  so a host writes a fresh one before every boot.
+- **Each new story game asks its date and time.** The menu asks **WHAT IS TODAY?**: month, day, year, hour and minute
+  (LEFT/RIGHT a field, UP/DOWN its value, A keeps it, B skips). It then asks the player's **birthday** (month and day;
+  B skips), and the sign loader opens the game. Each of the three story slots keeps its own clock and birthday.
+  Replacing a run asks again. Resuming a saved run, free play and link sessions never ask. A skipped clock stays unset
+  until SETUP > TIME sets it in that game; skipping the birthday means no sign for that run.
+- **Free play keeps its own Classic clock.** SETUP > TIME can set it without changing any story slot. A host can write
+  a **HOST CLOCK** block before power-on (format below); it updates Classic silently and is consumed at boot. A host
+  writes a fresh block before every boot. Story dates remain the dates chosen for those games.
 - **Between power-ons, the clock stops.** The cartridge has no clock chip, so without a host clock it resumes where it
   stopped: time away is `CT_AWAY_UNKNOWN` and nothing reacts to it. Only play time moves the clock.
 - **While the cartridge runs, the clock counts VBlanks.** GBDK's `sys_time` advances once per VBlank. One VBlank is
@@ -32,11 +30,10 @@ has no real-time clock. MBC3+RTC tops out at 2 MiB of ROM, so it is not an optio
 
 ### Old saves
 
-- A version 1 record (the minute of the week the player last confirmed) is read and migrated: its weekday and time are
-  kept, in the week of 2026-01-04 on (no date was ever kept), and it is never asked the date again. SETUP > TIME
-  corrects it.
-- A save with no clock record at all (from before the time module) is asked once, at its next game start.
-- Every older save is asked the birthday once, at its next game start (then never again).
+- Version 1 clock records are read and migrated: their weekday and time are kept in the week beginning 2026-01-04.
+- Resuming an existing story slot with no independent clock inherits the legacy Classic clock. Once saved, its clock
+  is independent. Resuming never interrupts play with a question.
+- A new story game always begins with fresh date and birthday questions, including on an older cartridge save.
 
 ## The HOST CLOCK block (for the website)
 
@@ -63,22 +60,32 @@ a correction: unknown), and writes 0 over byte 0. Anything else is ignored. Exam
 01 00 EA 07 0A 05 0B 0A 1E 00` + the CRC (low byte first). `test/harness/capture_flow.py`
 (`host_clock`) builds it.
 
-## What is kept (SRAM bank 15)
+## What is kept (independent clocks)
 
-There are two 32-byte records, A at bank 15 offset 0x1F80 and B at 0x1FA0. In the core's linear store addresses
-(`bank*0x2000 + offset`) they are **0x1FF80..0x1FF9F and 0x1FFA0..0x1FFBF**. On the cartridge both live at
-0xBF80..0xBFBF with RAM bank 15 selected.
+Each clock has two alternating 32-byte records, with the same version 2 layout and CRC protocol:
+
+| clock               | SRAM bank | offsets A / B   | linear addresses A / B |
+| ------------------- | --------- | --------------- | ---------------------- |
+| Classic / free play | 15        | 0x1F80 / 0x1FA0 | 0x1FF80 / 0x1FFA0      |
+| Story slot 0        | 15        | 0x1E40 / 0x1E60 | 0x1FE40 / 0x1FE60      |
+| Story slot 1        | 1         | 0x1F80 / 0x1FA0 | 0x03F80 / 0x03FA0      |
+| Story slot 2        | 3         | 0x1F80 / 0x1FA0 | 0x07F80 / 0x07FA0      |
+
+Switching between games saves the outgoing clock and restores the incoming clock, birthday and time effects.
+Only the active game's clock advances. A new story game clears that slot's old commit bytes before writing its fresh
+clock; other slots and Classic remain intact.
 
 Bank 15 holds:
 
-| bank 15 offset                                                 | what                                                           | written by                              |
-| -------------------------------------------------------------- | -------------------------------------------------------------- | --------------------------------------- |
-| 0x0000..0x1AFF                                                 | story slot 0's records, play block, OWNED, RBITS               | core `cru_story.c` (wiped on a new run) |
-| 0x1D00..0x1DB7                                                 | story slot 0's `crucible_story` record (magic, 180 B, CRC)     | core `cru_story.c`                      |
-| 0x1F00..0x1F06                                                 | easter eggs found ('E' 'G', 4 bytes of bits, DMG flag)         | `crucible_eggs.c`                       |
-| **0x1F80..0x1FBF**                                             | **time records A and B**                                       | **`crucible_time.c`**                   |
-| **0x1FE0..0x1FEF**                                             | **the HOST CLOCK block (written by a host, consumed at boot)** | **`crucible_time.c`**                   |
-| 0x1DB8..0x1EFF, 0x1F07..0x1F7F, 0x1FC0..0x1FDF, 0x1FF0..0x1FFF | free                                                           |                                         |
+| bank 15 offset                                                                 | what                                                           | written by                              |
+| ------------------------------------------------------------------------------ | -------------------------------------------------------------- | --------------------------------------- |
+| 0x0000..0x1AFF                                                                 | story slot 0's records, play block, OWNED, RBITS               | core `cru_story.c` (wiped on a new run) |
+| 0x1D00..0x1DB7                                                                 | story slot 0's `crucible_story` record (magic, 180 B, CRC)     | core `cru_story.c`                      |
+| 0x1F00..0x1F06                                                                 | easter eggs found ('E' 'G', 4 bytes of bits, DMG flag)         | `crucible_eggs.c`                       |
+| **0x1E40..0x1E7F**                                                             | **story slot 0 clock A and B**                                 | **`crucible_time.c`**                   |
+| **0x1F80..0x1FBF**                                                             | **time records A and B**                                       | **`crucible_time.c`**                   |
+| **0x1FE0..0x1FEF**                                                             | **the HOST CLOCK block (written by a host, consumed at boot)** | **`crucible_time.c`**                   |
+| 0x1DB8..0x1DBF, 0x1E80..0x1EFF, 0x1F07..0x1F7F, 0x1FC0..0x1FDF, 0x1FF0..0x1FFF | free                                                           |                                         |
 
 (0x1DC0..0x1E3F is story slot 0's player record since the fight system; a dump after a story run, a fight and free
 play showed 0x1FC0..0x1FFF all zero before the host block moved in.)
@@ -131,8 +138,7 @@ This is the dialogue records' protocol. A power cut at any point leaves the prev
 each of the 33 writes and corrupting each byte).
 
 Zeroed SRAM (a save without a clock record), 0xFF (a new battery) or noise has no valid record. The game then
-starts a fresh clock (2026-01-01 8:00 AM, unset) and asks at the first game start. It writes nothing until it has an
-answer, a host clock, or a minute has passed.
+starts an unset clock (2026-01-01 8:00 AM). Free play never asks; each new story game asks and stores a fresh clock.
 Saves without a clock record load unchanged: the Classic records, the story slots, the dialogue records and the eggs are not read or
 written by this module. RESET GAME keeps the clock, like the settings.
 

@@ -21,23 +21,7 @@
 #define decoded ((uint8_t *)SRAM_PTR(0xa500u))
 #define PIXELS(slot) (decoded + (uint16_t)(slot) * 1024u)
 static uint16_t shades[3], masks_out[2];
-/* Exact integer results of the original neck/bend equations: no per-pose divides. */
-static const int8_t neck_table[17][17] = {
-    {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, {1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-    {2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0}, {3, 3, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 0, 0, 0, 0, 0},
-    {4, 4, 4, 3, 3, 3, 3, 2, 2, 2, 1, 1, 1, 0, 0, 0, 0}, {5, 5, 4, 4, 4, 3, 3, 3, 2, 2, 2, 1, 1, 1, 0, 0, 0},
-    {6, 5, 5, 4, 4, 4, 3, 3, 3, 2, 2, 1, 1, 1, 0, 0, 0}, {6, 5, 5, 5, 4, 4, 3, 3, 3, 2, 2, 1, 1, 1, 0, 0, 0},
-    {6, 6, 5, 5, 4, 4, 4, 3, 3, 2, 2, 2, 1, 1, 0, 0, 0}, {6, 5, 5, 5, 4, 4, 3, 3, 3, 2, 2, 1, 1, 1, 0, 0, 0},
-    {6, 5, 5, 4, 4, 4, 3, 3, 3, 2, 2, 1, 1, 1, 0, 0, 0}, {5, 5, 4, 4, 4, 3, 3, 3, 2, 2, 2, 1, 1, 1, 0, 0, 0},
-    {4, 4, 4, 3, 3, 3, 3, 2, 2, 2, 1, 1, 1, 0, 0, 0, 0}, {3, 3, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 0, 0, 0, 0, 0},
-    {2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0}, {1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-    {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}};
-static const int8_t bend_table[17][7] = {{0, 0, 0, 0, 0, 0, 0},    {0, 0, 0, 0, 0, 0, 0},    {-1, -1, 0, 0, 0, 1, 1},
-                                         {-2, -1, 0, 0, 0, 1, 2},  {-3, -2, -1, 0, 1, 2, 3}, {-3, -2, -1, 0, 1, 2, 3},
-                                         {-3, -2, -1, 0, 1, 2, 3}, {-3, -2, -1, 0, 1, 2, 3}, {-4, -2, -1, 0, 1, 2, 4},
-                                         {-3, -2, -1, 0, 1, 2, 3}, {-3, -2, -1, 0, 1, 2, 3}, {-3, -2, -1, 0, 1, 2, 3},
-                                         {-3, -2, -1, 0, 1, 2, 3}, {-2, -1, 0, 0, 0, 1, 2},  {-1, -1, 0, 0, 0, 1, 1},
-                                         {0, 0, 0, 0, 0, 0, 0},    {0, 0, 0, 0, 0, 0, 0}};
+static int8_t necks[17], bends[7];
 static uint8_t last_step = 255u, last_apart = 255u;
 static const uint8_t bits[8] = {128, 64, 32, 16, 8, 4, 2, 1}, col_bit[4] = {1, 2, 4, 8};
 static const uint16_t tile_bits[16] = {1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768};
@@ -380,14 +364,19 @@ void fusion_frame(uint8_t step, uint8_t cx, uint8_t cy, uint8_t apart) BANKED {
   last_apart = apart;
   ENABLE_RAM;
   SWITCH_RAM(2);
-  /* One addition-built interpolation table replaces the per-row multiplications. */
-  build_lerp(step);
+  /* Per-frame tables: neck width by distance from the middle row, bend by curl value. */
+  {
+    uint8_t d;
+    int16_t k = (int16_t)step * (FUSION_STEPS - step);
+    for (d = 0; d < 17u; d++) necks[d] = (int8_t)(k * (16 - d) / 160);
+    for (d = 0; d < 7u; d++) bends[d] = (int8_t)(((int16_t)d - 3) * k / 48);
+  }
   for (slot = 0; slot < 2u; slot++) {
     uint16_t sy_fp, ty_fp, sy_step, ty_step;
     out = OUT(slot);
     memset(out, 0, 256);
-    top = LERP(BOUND(slot, 0), BOUND(2, 0));
-    bottom = LERP(BOUND(slot, 1), BOUND(2, 1));
+    top = between(BOUND(slot, 0), BOUND(2, 0), step);
+    bottom = between(BOUND(slot, 1), BOUND(2, 1), step);
     if (bottom <= top) bottom = top + 1;
     /* Rows of the deforming body sample source and target rows by fixed-point steps (one division each). */
     sy_step = ((uint16_t)(BOUND(slot, 1) - BOUND(slot, 0)) << 8) / (uint16_t)(bottom - top);
@@ -409,11 +398,11 @@ void fusion_frame(uint8_t step, uint8_t cx, uint8_t cy, uint8_t apart) BANKED {
       if (tl > tr) {
         tl = tr = 16;
       }
-      dl = LERP(sl, tl);
-      dr = LERP(sr, tr);
+      dl = between(sl, tl, step);
+      dr = between(sr, tr, step);
       /* Opposing lobes stretch a neck toward the other body, bend, then close into the new contour. */
-      neck = neck_table[step][y > 16u ? y - 16u : 16u - y];
-      bend = bend_table[step][curl[(y + step) & 31u] + 3];
+      neck = necks[y > 16u ? y - 16u : 16u - y];
+      bend = bends[curl[(y + step) & 31u] + 3];
       if (slot == 0u)
         dr += neck;
       else
