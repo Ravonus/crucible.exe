@@ -84,7 +84,7 @@ static uint8_t roll(void) {
   seed ^= seed << 8;
   return (uint8_t)seed;
 }
-/* About 18..44 seconds of bench time, independent of recipes, standing and discoveries. */
+/* about 18..44 seconds of bench time, independent of recipes, standing and discoveries */
 static void ambient_arm(void) { flow_idle_left = (uint16_t)(1080u + (uint16_t)roll() * 6u); }
 /* the hint tiles (2bpp, OBJ palette 4: cyan, white, magenta): a head peeking down with its eyes, and a lurker's horns */
 static const uint8_t TILES[32] = {0x3c, 0x00, 0x7e, 0x00, 0xff, 0x00, 0x99, 0x66, 0xbb, 0x66, 0xff,
@@ -423,8 +423,8 @@ static void ignored(void) {
     cru_story_act(s, CRU_ACT_IDLE); /* a voice ignored: standing still */
   story_save();
 }
-/* Random arrivals use the same hints, never force a scene or require a mix. After two of one kind, the other
- * gets the next turn so a quiet, friendly starter-only save cannot starve its bosses. */
+/* Random arrivals use the same hints, never force a scene or require a mix. After two of one kind, the other gets the
+ * next turn, so a quiet, friendly starter-only save cannot starve its bosses. */
 static void ambient_tick(uint8_t dt) {
   uint8_t kind, f;
   if (!story_on || link_on || flow_hint || flow_force) return;
@@ -436,10 +436,11 @@ static void ambient_tick(uint8_t dt) {
   if (ambient_streak >= 2u && kind == ambient_prev) kind = kind == FLOW_TALK ? FLOW_FIGHT : FLOW_TALK;
   ambient_streak = kind == ambient_prev ? (uint8_t)(ambient_streak + 1u) : 1u;
   ambient_prev = kind;
+  /* a fight brings an actual champion, independent of the progression's tutorial/DREAM gate */
   if (kind == FLOW_FIGHT) {
     do f = (uint8_t)(roll() & 7u);
     while (f >= CRU_FACTIONS);
-    flow_arg = f; /* an actual champion, independent of the progression's tutorial/DREAM gate */
+    flow_arg = f;
   }
   wait_(kind);
   flow_ambient = 1;

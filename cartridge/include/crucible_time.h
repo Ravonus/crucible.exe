@@ -88,8 +88,8 @@ typedef struct crucible_time_ctx {
 #define CT_MENU_LEAVE 2u /* it passed: redraw, restore */
 #define CT_MENU_MINUTE 3u /* an ordinary minute turned (SETUP's clock row) */
 
-void time_new_game(uint8_t slot) BANKED; /* fresh run: independent clock and asks */
-void time_free_play(void) BANKED; /* restore Classic clock, without a prompt */
+void time_new_game(uint8_t slot) BANKED; /* a fresh run: its own clock and asks */
+void time_free_play(void) BANKED; /* back to the Classic clock, without a prompt */
 void time_poll(void) BANKED; /* any frame; counts VBlanks since the last call */
 uint8_t time_ask_mode(void) BANKED; /* CT_ASK_FIRST when a game start should ask the date and time */
 uint8_t time_birthday_due(void) BANKED; /* 1 when a game start should ask the birthday */

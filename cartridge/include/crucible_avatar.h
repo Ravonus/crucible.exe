@@ -2,7 +2,7 @@
 #define CRUCIBLE_AVATAR_H
 /* Procedural talking faces (crucible_avatar.c): 48x48, 36 sprite tiles, no art data. */
 #define AVATAR_BYTES 576u
-/* Genome byte 5 bits 3..4: optional human look, independent of cosmetic unlocks. */
+/* genome byte 5 bits 3..4: an optional human look, independent of the cosmetic unlocks */
 #define AV_LOOK_DREAM 0u
 #define AV_LOOK_BOY 1u
 #define AV_LOOK_GIRL 2u

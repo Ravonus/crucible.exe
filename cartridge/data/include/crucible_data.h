@@ -14,7 +14,7 @@
 #define CRUCIBLE_ART_FORM 0x1fu
 extern uint16_t crucible_shade_mask;
 void crucible_get_fingerprint(uint8_t*) BANKED;
-#define CRUCIBLE_ART_STAMP 0xcb589130ul   /* the art build: a cache that outlives power-off must match it */
+#define CRUCIBLE_ART_STAMP 0xc30a5289ul   /* the art build: a cache that outlives power-off must match it */
 void crucible_load_font(void) BANKED;
 /* Object art (crucible_art.c): show frame index of object id's resting loop (turn 0, index = pose) or turntable
  * (turn 1, index = view step) from stream slot 0..CRUCIBLE_ART_SLOTS-1 (one per animated bench cell), or just the

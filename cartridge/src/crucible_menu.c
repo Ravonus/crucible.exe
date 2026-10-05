@@ -399,7 +399,7 @@ static void time_page(uint8_t mode) {
 }
 /* A new story game asks its date and birthday; loading and free play enter directly. */
 static uint8_t start(uint8_t k) {
-  /* Loading and free play have no asks. Re-entry from an ask keeps this new game's clock. */
+  /* loading and free play have no asks; re-entry from an ask keeps this new game's clock */
   if (k != MENU_STORY_NEW) {
     pend = 0;
     cursor(255u);

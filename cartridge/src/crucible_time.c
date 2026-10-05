@@ -179,7 +179,7 @@ static void load_(void) {
   reported_ = CT_AWAY_UNKNOWN;
   read_(record_at, a, CT_REC_BYTES);
   read_(record_at + CT_REC_BYTES, b, CT_REC_BYTES);
-  /* Existing runs inherit the legacy clock once; subsequent changes belong to their slot. */
+  /* existing runs inherit the legacy clock once; later changes belong to their slot */
   if (clock_slot != 255u && ct_latest(a, b) == 255u) {
     read_(CT_REC_A, a, CT_REC_BYTES);
     read_(CT_REC_B, b, CT_REC_BYTES);
@@ -417,7 +417,7 @@ static void switch_clock(uint8_t slot, uint8_t fresh) {
     mod_ = CT_DEFAULT_MOD;
     reported_ = CT_AWAY_UNKNOWN;
     next_mar_ = 120u;
-    /* A replaced slot must not reload the previous run's clock after a restart. */
+    /* a replaced slot must not reload the previous run's clock after a restart */
     crucible_sram_write(0, record_at + CT_COMMIT, 0);
     crucible_sram_write(0, record_at + CT_REC_BYTES + CT_COMMIT, 0);
     persist_();

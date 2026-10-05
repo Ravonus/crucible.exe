@@ -137,9 +137,9 @@ static void load_wave(uint8_t w) {
   NR30_REG = 0x80u;
   m_wave = w;
 }
+/* effects keep the bed at its chosen volume: the quantized wave gain never ducks to zero */
 static void set_k(void) {
   uint8_t k = (uint8_t)(m_vol * m_gain);
-  /* Effects keep the bed at its chosen volume; quantized wave gain must never duck to zero. */
   m_k = k;
 }
 /* an envelope at the music's volume (a scaled start volume keeps its pace) */
@@ -359,7 +359,7 @@ static void music_tick(void) {
     row_tick();
     return;
   }
-  /* Fade ramps belong to song changes, independently of effects. */
+  /* fade ramps belong to song changes, independently of effects */
   k = m_gain;
   if (m_gain != m_goal && (m_rt = m_rt > e ? (uint8_t)(m_rt - e) : 0u) == 0u) {
     m_rt = m_rate;
@@ -445,19 +445,20 @@ static void voice_list(uint8_t ch, uint16_t id, uint8_t category, uint8_t from, 
 void sound_voice(uint16_t id, uint8_t category, uint8_t kind, uint8_t from) BANKED {
   if (sfx_off) return;
   pitch = 0;
-  /* The music has its own deterministic stream: actions colour upcoming notes and section choices. */
+  /* the music has its own deterministic stream: actions colour upcoming notes and section choices */
   m_seed ^= (uint16_t)(id * 0x9e37u) ^ ((uint16_t)category << 8) ^ kind;
   if (!m_seed) m_seed = 1u;
   reaction_left = kind == 2u ? 192u : 96u;
   reaction_octave = kind == 2u || (motif(id, from) & 1u) ? 12u : 0u;
-  reaction_duty = category & 3u;
+  /* 25% or 50%: the score's own duties (music STYLE.md: never 12.5% or 75%) */
+  reaction_duty = (category & 1u) ? 1u : 2u;
   if (kind == 0u)
     voice_list(0, id, category, 0, 1, 12, 4, 4);
   else if (kind == 1u)
     voice_list(0, id, category, 0, 2, 12, 4, 8);
   else if (kind == 2u) {
+    /* a single pulse fanfare leaves the score's melody and bass playing */
     voice_list(0, id, category, 0, 4, 12, 9, 36);
-    /* Single pulse fanfare leaves the score melody and bass playing. */
   } else if (kind == 3u)
     voice_list(0, id, category, 0, 3, 12, 6, 16);
   else if (kind == 4u)
@@ -543,7 +544,7 @@ void sound_play(uint8_t id) BANKED {
 /* Fusion climbs through the same mode as the ingredients, with a finite tail. */
 void sound_drone(uint8_t step) BANKED {
   if (sfx_off) return;
-  /* Let the ingredient answer the bass, without replacing the bass channel. */
+  /* the ingredient answers the bass without taking the bass channel */
   voice_list(0, step, reaction_duty, step >> 1, 1, 0, 3, 3);
   reaction_left = 96u;
   m_seed ^= (uint16_t)(step + 1u) << 8;

@@ -43,7 +43,7 @@ static uint8_t rnd(void) {
   seed ^= seed << 1;
   return seed;
 }
-/* Recipe-aware prefetch while choosing the second ingredient: invisible, lower priority than visible art. */
+/* recipe-aware prefetch while the second ingredient is chosen: invisible, below the visible art's priority */
 void reveal_predict(uint16_t a, uint16_t b) BANKED {
   uint16_t id;
   if (a >= core.items || b >= core.items) return;

@@ -991,9 +991,18 @@ def phase_story(ctx: Context) -> None:
 
 def phase_return(ctx: Context) -> None:
     if "free" in ctx.saves:
-        # A host (the website's emulator) leaves a host clock block hours after the saved clock: nothing asks, and the
-        # time away is real.
+        # A host (the website's emulator) leaves a host clock block before every boot. Free play never asks the date,
+        # so its first hosted boot sets the Classic clock; the next one, hours later, is real time away; nothing asks.
         ram = bytearray(ctx.saves["free"])
+        date, minute = saved_clock(ram)
+        write_host_clock(ram, date, minute)
+        g = Game(ctx, "return-first", bytes(ram))
+        g.wait_screen(MENU, 6000)
+        g.step(240)
+        g.free_play()
+        g.step(600)
+        ram = bytearray(g.sram())
+        g.stop()
         date, minute = saved_clock(ram)
         write_host_clock(ram, date, minute + TIME_AWAY_HOURS * 60)
         g = Game(ctx, "return", bytes(ram))

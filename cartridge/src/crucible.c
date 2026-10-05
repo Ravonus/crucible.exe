@@ -1055,7 +1055,7 @@ static void tick_merge(void) {
       if (k < used + holds[round]) break;
       used += holds[round];
       if (k < used + swaps * 2u) {
-        j = (uint8_t)((k - used));
+        j = (uint8_t)(k - used);
         show_new = (j & 1u) == 0u;
         if (crossed(end_fuse + used + j))
           sound_voice(show_new ? result : mix_a, crucible_category(show_new ? result : mix_a), 5,
