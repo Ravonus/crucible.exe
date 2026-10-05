@@ -1,0 +1,16 @@
+CRUCIBLE.EXE
+Copyright (c) 2026 Ravonus
+
+Code, tools, harnesses and the built ROM are licensed under the MIT License (LICENSE). This includes
+cartridge/include/keel_*.h, the KEEL engine's retro codec, clock, ROM, palette-lease, dialogue-choice and music
+headers, which are by the same author and are included here under this repository's MIT License.
+
+Art, the catalogue, rooms and the story and dialogue text are dedicated to the public domain under CC0 1.0
+(LICENSES/CC0-1.0.txt). README.md, section Licence, lists which paths are which.
+
+release/crucible.exe.gbc
+  The ROM links the GBDK-2020 4.5.0 runtime library and the SDCC runtime library. Both are licensed under the GNU
+  GPL version 2 with a linking exception: linking them into a program does not by itself place that program under
+  the GPL. GBDK-2020: https://github.com/gbdk-2020/gbdk-2020 (licenses/LICENSE_GPLV2_LE in its releases).
+
+The harnesses use PyBoy (LGPL-3.0) and Pillow; neither is distributed here.
