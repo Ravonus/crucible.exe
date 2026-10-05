@@ -48,4 +48,18 @@
 #define EV_AGAIN_N 1u
 #define EV_CONTEST_FIRST 879u
 #define EV_CONTEST_N 1u
+#define EV_MYSTIC_FIRST 880u
+#define EV_MYSTIC_N 2u
+#define EV_SKY_FIRST 882u
+#define EV_SKY_N 13u
+#define EV_SIGN_FIRST 895u
+#define EV_SIGN_N 12u
+#define EV_ANGEL_FIRST 907u
+#define EV_ANGEL_N 3u
+#define EV_LEAD_FIRST 910u
+#define EV_LEAD_N 3u
+#define EV_AFTER_FIRST 913u
+#define EV_AFTER_N 2u
+#define EV_COUNT_FIRST 915u
+#define EV_COUNT_N 1u
 #endif

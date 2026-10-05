@@ -113,6 +113,7 @@ PAIR_SCALE = 2
 
 SESSION_FRAMES = 3 * 3600  # a 3-minute session at 60 frames a second
 MAX_RACE_MIXES = 14
+ASK_PRESSES = 12  # A presses through a game start's asks (date and time, birthday) and the sign loader
 
 
 def screen_text(side: Side, y: int) -> str:
@@ -256,12 +257,17 @@ class LinkCapture:
         until(cable, lambda: self.linked(cable), 600)
 
     def boot(self, cable: Cable) -> None:
-        """Power on both and get past the title to the title card's menu."""
+        """Power on both to the title card's menu. The title card asks nothing: a game start asks the date and time."""
         until(cable, lambda: self.both_on(cable, Screen.MENU), 6000)
-        cable.step(240)
-        for side in (cable.host, cable.guest):
-            cable.press(side, "a")
-        cable.step(120)
+        cable.step(360)
+
+    def asks(self, cable: Cable, side: Side) -> None:
+        """A fresh cartridge's first story or free play start asks the date and time, then the birthday (A keeps what
+        is shown), then the sign loader opens the game: A until the menu is gone."""
+        for _ in range(ASK_PRESSES):
+            if self.screen(side) != Screen.MENU:
+                return
+            cable.press(side, "a", 40)
 
     def to_lobby(self, cable: Cable) -> None:
         """PLAY > LINK on both, HOST on the host and JOIN on the guest, then FREE PLAY as the save each brings."""
@@ -297,11 +303,12 @@ class LinkCapture:
         return until(cable, lambda: self.both_on(cable, Screen.BENCH), 1200)
 
     def start_free_play(self, cable: Cable) -> None:
-        """PLAY > FREE on both, then let both benches settle."""
+        """PLAY > FREE on both (through the game start's asks), then let both benches settle."""
         for side in (cable.host, cable.guest):
             cable.press(side, "a", 30)
             cable.press(side, "down", 10)
             cable.press(side, "a", 30)
+            self.asks(cable, side)
         until(cable, lambda: self.both_on(cable, Screen.BENCH), 1500)
         cable.step(300)
 

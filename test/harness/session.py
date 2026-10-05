@@ -20,6 +20,7 @@ SHADOW_OAM = 0xC000  # GBDK's shadow OAM, copied to OAM (0xFE00) by DMA every VB
 OAM = 0xFE00
 OAM_ENTRY_BYTES = 4  # y, x, tile, attributes; y == 0 puts a sprite off screen
 OVERLAY_OAM_ENTRIES = 24  # the material overlay owns OAM entries 0..23
+ASK_PRESSES = 12  # A presses through a game start's asks (date and time, birthday) and the sign loader
 
 
 class Screen(IntEnum):
@@ -122,21 +123,31 @@ class Session:
             raise RuntimeError(f"screen {self.screen} never became {int(screen)}")
         return reached
 
-    def accept_clock(self, limit: int = 3000, *, strict: bool = False) -> None:
-        """Power on to the title menu: the first power-on asks the time on the title card; A accepts the clock."""
+    def power_on(self, limit: int = 3000, *, strict: bool = False) -> None:
+        """Power on to the title menu and let it settle. The title card asks nothing: on a fresh cartridge the date
+        and time are asked at the first game start (`answer_asks`)."""
         self.wait_for(Screen.MENU, limit, strict=strict)
-        self.step(300)
-        self.pulse("a")
-        self.step(300)
+        self.step(600)
+
+    def answer_asks(self) -> None:
+        """Right after a game start is chosen: a fresh cartridge asks the date and time, then the birthday (A keeps
+        what is shown), then the sign loader opens the game. A until the menu is gone."""
+        self.step(30)
+        for _ in range(ASK_PRESSES):
+            if self.screen != Screen.MENU:
+                break
+            self.pulse("a")
+            self.step(40)
 
     def start_free_play(self, limit: int = 3000, *, strict: bool = False) -> None:
-        """Power on, then PLAY -> FREE PLAY, and let the bench settle."""
-        self.accept_clock(limit, strict=strict)
+        """Power on, then PLAY -> FREE PLAY through the game start's asks, and let the bench settle."""
+        self.power_on(limit, strict=strict)
         self.pulse("a")
         self.step(180)
         self.pulse("down")
         self.step(180)
         self.pulse("a")
+        self.answer_asks()
         self.wait_for(Screen.BENCH, limit, strict=strict)
         self.step(600)
 

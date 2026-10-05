@@ -100,6 +100,8 @@ void bands_tick(uint8_t dt) BANKED;
 extern uint8_t menu_slot; /* the story slot MENU_STORY_NEW / _LOAD chose */
 /* TALK (crucible_talk.c): a seeded character's conversation */
 void talk_open(uint16_t seed, uint8_t sector) BANKED;
+void talk_angel(uint16_t count) BANKED; /* the next talk is called in by a count on the shelf (crucible_flow.c) */
+extern uint8_t talk_angel_nudges, talk_mode, talk_test_mode;
 uint8_t talk_tick(uint8_t pressed) BANKED;
 uint8_t talk_bust(void) BANKED;
 uint8_t talk_tear(void) BANKED; /* 1 once when a line tears the scene */

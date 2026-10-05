@@ -304,6 +304,16 @@ static uint8_t coldest(void) {
 uint8_t flow_after_mix(uint8_t r) BANKED {
   crucible_story *s = talk_saga();
   uint8_t f;
+  time_mark_act(); /* a mix the minute before an angel minute calls someone in then (crucible_time.c) */
+  {
+    static uint16_t counted;
+    uint16_t n = core.found[0]; /* 111, 222 .. 999 things on the shelf: someone counts them with you */
+    if (n >= 111u && n <= 999u && !(n % 111u) && n != counted) {
+      counted = n;
+      talk_angel(n);
+      time_angel_arm();
+    }
+  }
   if (r == STORY_LOSS || r == STORY_OVER) return r; /* the machine's own lines: at once */
   if (link_on && !(link_started && link_mode == LINK_COOP))
     return 0; /* a co-op session keeps its encounters (its bosses are shared, 9.4) */
@@ -453,6 +463,9 @@ uint8_t flow_tick(uint8_t screen, uint8_t *pressed) BANKED {
     poll = 0;
     time_check();
   }
+  /* an angel minute after something meaningful (or a count on the shelf): someone steps in, at most once; never while
+   * linked, never over one already waiting (time-awareness.md) */
+  if (time_angel_take() && !flow_hint && !flow_force && !link_on) force_(FLOW_TALK);
   if (flow_force) { /* telegraphed: it comes by itself, or at once if you go to it */
     dir = flow_force == FLOW_TALK ? J_UP : J_DOWN;
     t += dt;

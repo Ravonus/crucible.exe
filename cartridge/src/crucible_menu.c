@@ -6,7 +6,9 @@
  * Settings live in the save (the core's options byte) and apply at once; leaving settings saves them. RESET GAME asks
  * for A to be held two seconds, erases progress (cru_reset) and restarts the cartridge.
  * Names live with the three story slots: given when a run wakes, changed with SELECT on the slot list.
- * Power-on first asks what time it is (crucible_time.c: no clock chip, so the player says). */
+ * The first time a game is started from PLAY (story or free play; not a link session), it asks the date and time
+ * (crucible_time.c: no clock chip, unless a host left one in SRAM) and the player's birthday, once each, then a brief
+ * loader shows the player's sign mark (crucible_sky.c, run by crucible.c). Never on the title card. */
 #pragma bank 255
 #include <gb/gb.h>
 #include <string.h>
@@ -64,13 +66,17 @@ enum {
   PAGE_LOBBY,
   PAGE_TIME,
   PAGE_RULES,
-  PAGE_BRING
+  PAGE_BRING,
+  PAGE_BIRTH
 };
 static uint8_t bring_role; /* the page that asks which save to bring (fight spec 9.3): HOST or JOIN chosen */
 /* the keyboard edits the link seed, or a story slot's name (rename_slot < 3) */
 static uint8_t seed_edit, rename_slot = 255u;
-/* the time page: CT_ASK_* mode, and day, hour (0-23), minute, whole weeks away */
-static uint8_t tmode, tf[4];
+/* the date and time page: CT_ASK_* mode and its fields (crucible_time.h CT_FY..CT_FMIN); the birthday page's month
+ * and day; the game start waiting behind the asks (a MENU_* action, 0 none) */
+static uint8_t tmode, tf[5], bf[2], pend;
+/* the fields in the order they show: month, day, year, hour, minute */
+static const uint8_t FORD[5] = {CT_FM, CT_FD, CT_FY, CT_FH, CT_FMIN};
 static char seed_word[CRU_NAME + 1u] = "DREAM   ";
 uint8_t menu_slot;
 #define SETTINGS 6u
@@ -314,27 +320,34 @@ static void draw(void) {
     cursor_at(3u, at < 3u ? (uint8_t)(ROW0 + 2u + at) : ROW0 + 6u);
     cues("CHOOSE", "BACK");
   } else if (page == PAGE_TIME) {
-    char v[13];
-    static const uint8_t fx[3] = {4, 8, 11}, fw[3] = {3, 2, 2};
+    char v[16], w[14];
+    uint8_t k;
+    static const uint8_t fx[5] = {11, 4, 8, 8, 11}, fw[5] = {4, 3, 2, 2, 2}, fy[5] = {3, 3, 3, 4, 4};
     cursor(255u);
-    field_(3, ROW0 + 1u, 14, tmode == CT_ASK_ADJUST ? "SET THE CLOCK" : "WHAT TIME", T_BRASS);
-    field_(3, ROW0 + 2u, 14, tmode == CT_ASK_FIRST ? "IS IT?" : tmode == CT_ASK_RETURN ? "IS IT NOW?" : "", T_BRASS);
-    time_format(v, (uint8_t)(tf[0] | 0x80u), tf[1], tf[2]);
-    text_(4, ROW0 + 4u, v, 12, T_BRASS);
-    if (at < 3u) {
-      text_(fx[at], ROW0 + 4u, v + fx[at] - 4u, fw[at], T_CREAM);
-      if (at == 1u) text_(14, ROW0 + 4u, v + 10, 2, T_CREAM);
-      for (i = 0; i < fw[at]; i++) put_((uint8_t)(fx[at] + i), ROW0 + 5u, GLYPH('^'), T_CREAM);
-    }
-    /* coming back: whole weeks too (the day and hour say the rest) */
-    if (tmode == CT_ASK_RETURN) {
-      v[0] = '+';
-      v[1] = (char)('0' + tf[3]);
-      v[2] = 0;
-      text_(5, ROW0 + 6u, v, 2, at == 3u ? T_CREAM : T_BRASS);
-      text_(8, ROW0 + 6u, tf[3] == 1u ? "WEEK" : "WEEKS", 5, at == 3u ? T_CREAM : T_BRASS);
-    }
-    cues("OK", tmode == CT_ASK_ADJUST ? "BACK" : "NOT SURE");
+    field_(3, ROW0 + 1u, 14, tmode == CT_ASK_ADJUST ? "SET THE CLOCK" : "WHAT IS TODAY?", T_BRASS);
+    time_date_text(v, tf);
+    text_(4, ROW0 + 3u, v + 4, 11, T_BRASS); /* OCT 05 2026 */
+    memcpy(w, v, 4);
+    time_format(w + 4, 7u | 0x80u, tf[CT_FH], tf[CT_FMIN]);
+    text_(4, ROW0 + 4u, w, 12, T_BRASS); /* MON 10:04 AM */
+    k = FORD[at < 5u ? at : 0u];
+    text_(fx[k], (uint8_t)(ROW0 + fy[k]), fy[k] == 3u ? v + fx[k] : w + fx[k] - 4u, fw[k], T_CREAM);
+    if (k == 3u) text_(14, ROW0 + 4u, w + 10, 2, T_CREAM);
+    cues("OK", tmode == CT_ASK_ADJUST ? "BACK" : "SKIP");
+  } else if (page == PAGE_BIRTH) {
+    char v[16];
+    uint8_t f[5];
+    cursor(255u);
+    field_(3, ROW0 + 1u, 14, "YOUR BIRTHDAY?", T_BRASS);
+    field_(3, ROW0 + 2u, 14, "(NO YEAR)", T_BRASS);
+    f[CT_FY] = 0;
+    f[CT_FM] = bf[0];
+    f[CT_FD] = bf[1];
+    time_date_text(v, f);
+    v[10] = 0;
+    text_(7, ROW0 + 4u, v + 4, 6, T_BRASS);
+    text_(at ? 11u : 7u, ROW0 + 4u, v + (at ? 8u : 4u), at ? 2u : 3u, T_CREAM);
+    cues("OK", "SKIP");
   } else if (page == PAGE_RESET) {
     for (i = 0; i < 5u; i++) field_(3, ROW0 + i, 14, reset_lines[i], i ? T_BRASS : T_CREAM);
     text_(3, ROW0 + 6u, " ", 14, T_BRASS);
@@ -375,54 +388,100 @@ void menu_link_refresh(void) BANKED {
 }
 static void time_page(uint8_t mode) {
   tmode = mode;
-  time_ask_prefill(tf, tf + 1, tf + 2);
-  tf[3] = 0;
+  time_ask_prefill(tf);
   page = PAGE_TIME;
   at = 0;
 }
+/* a game start (MENU_FREE / MENU_STORY_*): the date and time, then the birthday, once each; then the game */
+static uint8_t start(uint8_t k) {
+  if (time_ask_mode() != CT_ASK_DONE) {
+    pend = k;
+    time_page(CT_ASK_FIRST);
+  } else if (time_birthday_due()) {
+    pend = k;
+    page = PAGE_BIRTH;
+    bf[0] = 1;
+    bf[1] = 1;
+    at = 0;
+  } else {
+    pend = 0;
+    cursor(255u);
+    return k;
+  }
+  sound_play(SFX_OPEN);
+  draw();
+  return MENU_STAY;
+}
 void menu_open(uint8_t is_title) BANKED {
-  uint8_t ask;
   flow_pending = 0;
   scene_draw(SCENE_MENU);
   title = is_title;
   page = PAGE_MAIN;
   at = 0;
   changed = 0;
+  pend = 0;
   time_menu(2);
-  /* power-on: what time is it? (first ever, or confirm the estimate) */
-  if (is_title && (ask = time_ask_mode()) != CT_ASK_DONE) time_page(ask);
   draw();
 }
-/* the time page: LEFT/RIGHT a field, UP/DOWN its value, A sets it, B is NOT SURE (or back, from SETUP) */
-static void time_tick(uint8_t pressed) {
-  static const uint8_t span[4] = {7, 24, 60, 10};
-  uint8_t n = tmode == CT_ASK_RETURN ? 4u : 3u;
+/* the date and time page: LEFT/RIGHT a field, UP/DOWN its value, A sets it, B skips (or back, from SETUP) */
+static uint8_t time_tick(uint8_t pressed) {
+  static const uint8_t lo[5] = {0, 1, 1, 0, 0}, span[5] = {100, 12, 31, 24, 60};
+  uint8_t n;
+  n = time_month_days(tf[CT_FY], tf[CT_FM]);
   if (pressed & J_LEFT) {
-    at = at ? at - 1u : n - 1u;
+    at = at ? at - 1u : 4u;
     sound_play(SFX_MOVE);
     draw();
   } else if (pressed & J_RIGHT) {
-    at = (uint8_t)((at + 1u) % n);
+    at = (uint8_t)((at + 1u) % 5u);
     sound_play(SFX_MOVE);
     draw();
   } else if (pressed & (J_UP | J_DOWN)) {
-    tf[at] = (uint8_t)((tf[at] + ((pressed & J_UP) ? 1u : span[at] - 1u)) % span[at]);
+    uint8_t k = FORD[at], s = k == CT_FD ? n : span[k];
+    tf[k] = (uint8_t)(lo[k] + (uint8_t)((tf[k] - lo[k] + ((pressed & J_UP) ? 1u : s - 1u)) % s));
+    n = time_month_days(tf[CT_FY], tf[CT_FM]);
+    if (tf[CT_FD] > n) tf[CT_FD] = n;
     sound_play(SFX_MOVE);
     draw();
   } else if (pressed & (J_A | J_START | J_B)) {
     uint8_t ok = !(pressed & J_B);
+    time_answer(tmode, ok ? CT_ANSWER_OK : CT_ANSWER_SKIP, tf);
+    sound_play(ok ? SFX_PICK : SFX_CLOSE);
     if (tmode == CT_ASK_ADJUST) {
-      if (ok) time_answer(tmode, CT_ANSWER_OK, tf[0], tf[1], tf[2], 0);
       page = PAGE_SETTINGS;
       at = 3u;
-    } else {
-      time_answer(tmode, ok ? CT_ANSWER_OK : CT_ANSWER_SKIP, tf[0], tf[1], tf[2], tf[3]);
+    } else if (pend)
+      return start(pend);
+    else {
       page = PAGE_MAIN;
       at = 0;
     }
-    sound_play(ok ? SFX_PICK : SFX_CLOSE);
     draw();
   }
+  return MENU_STAY;
+}
+/* the birthday page: LEFT/RIGHT month or day, UP/DOWN the value, A keeps it, B skips (no sign); then the game */
+static uint8_t birth_tick(uint8_t pressed) {
+  uint8_t n = time_month_days(0, bf[0]); /* 2000 leaps: FEB 29 is a birthday */
+  if (pressed & (J_LEFT | J_RIGHT)) {
+    at ^= 1u;
+    sound_play(SFX_MOVE);
+    draw();
+  } else if (pressed & (J_UP | J_DOWN)) {
+    uint8_t s = at ? n : 12u;
+    bf[at] = (uint8_t)(1u + (uint8_t)((bf[at] - 1u + ((pressed & J_UP) ? 1u : s - 1u)) % s));
+    if (bf[1] > time_month_days(0, bf[0])) bf[1] = time_month_days(0, bf[0]);
+    sound_play(SFX_MOVE);
+    draw();
+  } else if (pressed & (J_A | J_START | J_B)) {
+    if (pressed & J_B)
+      time_birthday_set(0, 0);
+    else
+      time_birthday_set(bf[0], bf[1]);
+    sound_play((pressed & J_B) ? SFX_CLOSE : SFX_PICK);
+    return start(pend);
+  }
+  return MENU_STAY;
 }
 static void cycle(uint8_t row, int8_t d) {
   uint8_t v;
@@ -456,10 +515,8 @@ uint8_t menu_tick(uint8_t pressed) BANKED {
     } else if (e == CT_MENU_MINUTE && page == PAGE_SETTINGS)
       draw();
   }
-  if (page == PAGE_TIME) {
-    time_tick(pressed);
-    return MENU_STAY;
-  }
+  if (page == PAGE_TIME) return time_tick(pressed);
+  if (page == PAGE_BIRTH) return birth_tick(pressed);
   if (page == PAGE_MAIN) {
     uint8_t n = items();
     if (at >= n) at = 0;
@@ -525,9 +582,8 @@ uint8_t menu_tick(uint8_t pressed) BANKED {
       draw();
     } else if (pressed & J_A) {
       if (at == 1u) {
-        cursor(255u);
         sound_play(SFX_CLOSE);
-        return MENU_FREE;
+        return start(MENU_FREE);
       }
       page = at == 2u ? PAGE_LINK : PAGE_SLOTS;
       at = 0;
@@ -682,9 +738,8 @@ uint8_t menu_tick(uint8_t pressed) BANKED {
     } else if (pressed & J_A) {
       crucible_story st;
       menu_slot = at;
-      cursor(255u);
       sound_play(SFX_OPEN);
-      return story_peek(at, &st) ? MENU_STORY_LOAD : MENU_STORY_NEW;
+      return start(story_peek(at, &st) ? MENU_STORY_LOAD : MENU_STORY_NEW);
     } else if (pressed & J_SELECT) {
       crucible_story st;
       if (at >= 3u || !story_peek(at, &st)) {

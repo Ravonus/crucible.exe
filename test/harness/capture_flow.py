@@ -6,13 +6,15 @@ director's flow state, the header and cue rows).
 
 Phases (all by default; --phases picks some, in the order given):
   menu     the title and pause menus over many boot timings: never TALK, never FIGHT
-  free     a new player: the time ask, the title, PLAY > FREE PLAY, the first bench (cue rows), the filter flow
-           (SELECT, pick with A, the header shows it, B clears it; SELECT on the filter screen clears it), the first
-           mix and discovery, the book, TITLES, STATS, SETUP; then 100+ discoveries (the living rooms unlock at 64)
-           and the browse probe (every focus's animation finishes loading, no stalls); its save is kept for 'return'
+  free     a new player: the title (it asks nothing), PLAY > FREE PLAY, the date and time ask and the birthday ask
+           at that first game start, the sign loader, the first bench (cue rows), the filter flow (SELECT, pick with
+           A, the header shows it, B clears it; SELECT on the filter screen clears it), the first mix and discovery,
+           the book, TITLES, STATS, SETUP; then 100+ discoveries (the living rooms unlock at 64) and the browse probe
+           (every focus's animation finishes loading, no stalls); its save is kept for 'return'
   story    a story run: the bench, the pause menu and LEAVE, encounters arriving in play (forced and waiting, talk
            and fight), the approach with UP/DOWN, the pan there and back to the same bench, an ignored hint fading
-  return   a returning player: the free save rebooted hours later (a voice waits at the bench), the story slot resumed
+  return   a returning player: the free save rebooted with a host clock five hours on (nothing asks; a voice waits
+           at the bench), the story slot resumed
 
 Story fights need a faction that dislikes you. To reach one in a short script, the run's standing with one faction is
 set wary in RAM (the same state play reaches by making what that faction fears). Everything else is real input.
@@ -28,6 +30,7 @@ mix. The exit status is 1 when any check fails.
 from __future__ import annotations
 
 import argparse
+import datetime
 import hashlib
 import io
 import json
@@ -83,7 +86,8 @@ STATE_WRAM_BANK = 1
 SRAM_BANKS = 16
 SRAM_START = 0xA000
 SRAM_LAST = 0xBFFF
-SAVE_SIZE = SRAM_BANKS * 0x2000
+SRAM_BANK_SIZE = 0x2000
+SAVE_SIZE = SRAM_BANKS * SRAM_BANK_SIZE
 
 # Tilemap text: the font's tiles 128..191 are ASCII 32..95; anything else reads as '~'.
 FONT_FIRST_TILE = 128
@@ -94,6 +98,7 @@ HEADER_ROW = 0
 CUE_ROW = 16  # what A, B and SELECT do
 SIGN_ROW = 17  # START's hint, or an encounter's sign
 MENU_ROWS = range(10, 15)
+ASK_ROWS = range(9, 12)  # where the menu card shows the date, time and birthday asks
 FILTER_DETAIL_ROW = 14
 
 # The view is half way through a pan between the bench and an encounter (SCY away from 0 either way).
@@ -101,6 +106,21 @@ HALF_PAN = range(40, 91)
 FOCUS_LOADED = 255  # focus_load once the focused element's animation has finished loading
 ROOMS_SHOT_AT = 70  # owned elements by which the living rooms (unlocked at 64) are captured
 TIME_AWAY_HOURS = 5
+ASK_LIMIT = 16  # polls of the game start's asks before giving up on them
+BIRTHDAY = (11, 4)  # month, day: entered with UP from the 1st of January the ask starts on
+LOADER_SPRITES = 4  # the sign loader's mark: OAM 0..3, the first one tile 0
+
+# The clock's time records and the host clock block in battery RAM (docs/time-awareness.md).
+TIME_BANK = 15
+TIME_RECORDS = (0x1F80, 0x1FA0)  # records A and B: the newer valid one wins
+TIME_RECORD_SIZE = 32
+TIME_MAGIC = b"CT"
+TIME_COMMIT = 0xC7  # byte 27 of a committed record
+HOST_CLOCK_AT = 0x1FE0
+HOST_CLOCK_MAGIC = b"HCLK"
+HOST_CLOCK_VERSION = 1
+EPOCH = datetime.date(2000, 1, 1)  # the records count days from here
+MINUTES_PER_DAY = 1440
 
 
 @dataclass(frozen=True)
@@ -218,6 +238,7 @@ class Game:
         self.pb.set_emulation_speed(0)
         self.m = BankedMemory(self.pb.memory)
         self.frames = 0
+        self.seen_asks: list[str] = []
 
     # ---- time and input ----
 
@@ -247,6 +268,9 @@ class Game:
     def wait_screen_in(self, screens: Iterable[int], limit: int) -> bool:
         wanted = tuple(screens)
         return self.until(lambda: self.screen in wanted, limit)
+
+    def wait_menu_item(self, item: str, limit: int) -> bool:
+        return self.until(lambda: item in self.menu_items(), limit)
 
     def stop(self) -> None:
         self.pb.stop(save=False)
@@ -331,21 +355,66 @@ class Game:
     # ---- getting around ----
 
     def boot(self, wait: int = 0, shot: bool = False) -> None:
-        """Power on to the title card and answer the time ask (A takes the clock as shown)."""
+        """Power on to the title card, which asks nothing (the time is asked at the first game start)."""
         self.wait_screen(MENU, 6000)
         self.step(240 + wait)
         if shot:
-            self.snap("time-ask", "first boot asks the time on the title card")
-        self.pulse("a")
+            first = self.snap("title-first", "the first power-on: the title card asks nothing")
+            self.ctx.check(
+                "title: no time ask on the title card",
+                not any("WHAT" in row or "BIRTHDAY" in row for row in first.rows.values()),
+                str(first.rows),
+            )
         self.step(120)
 
-    def free_play(self) -> bool:
-        """Title card > PLAY > FREE PLAY, to the bench."""
+    def asks(self, shots: bool = False, birthday: tuple[int, int] | Literal["skip"] | None = None) -> list[str]:
+        """Answer a game start's asks: on a fresh cartridge the date and time, then the birthday, once each, then the
+        sign loader opens the game. A keeps what is shown; `birthday` enters a (month, day), or 'skip' leaves it with
+        B. Which asks came, in order."""
+        seen: list[str] = []
+        for _ in range(ASK_LIMIT):
+            if self.screen != MENU:
+                break
+            text = " ".join(self.row(y) for y in ASK_ROWS)
+            if "TODAY" in text:
+                if shots:
+                    self.snap("ask-date", "a game start asks the date and time (once)")
+                seen.append("date")
+                self.pulse("a", 30)
+            elif "BIRTHDAY" in text:
+                if isinstance(birthday, tuple):
+                    month, day = birthday
+                    for _ in range(month - 1):
+                        self.pulse("up", 4)
+                    self.pulse("right", 4)
+                    for _ in range(day - 1):
+                        self.pulse("up", 4)
+                if shots:
+                    self.snap("ask-birthday", "then the birthday (once; B skips)")
+                seen.append("birthday")
+                self.pulse("b" if birthday == "skip" else "a", 8)
+                if shots:
+                    self.step(24)
+                    self.snap("loader", "the sign loader: your mark, the moon beside it")
+                    marks = [self.sprite_byte(sprite) for sprite in range(LOADER_SPRITES + 1)]
+                    self.ctx.check(
+                        "loader: the sign mark shows while the game opens",
+                        self.screen == MENU and all(marks[:LOADER_SPRITES]) and self.sprite_byte(0, 2) == 0,
+                        str(marks),
+                    )
+            else:
+                self.step(20)
+        return seen
+
+    def free_play(self, shots: bool = False, birthday: tuple[int, int] | Literal["skip"] | None = None) -> bool:
+        """Title card > PLAY > FREE PLAY, through the game start's asks (kept in `seen_asks`), to the bench."""
         self.pulse("a")
         self.step(60)
         self.pulse("down")
         self.step(20)
         self.pulse("a")
+        self.step(20)
+        self.seen_asks = self.asks(shots, birthday)
         return self.wait_screen(BENCH, 3000)
 
     def story(self, shot: str | None = None) -> bool:
@@ -470,9 +539,11 @@ def check_sign(g: Game, tag: str, forced: bool, fight: bool) -> None:
         f"{tag}-{'telegraph' if forced else 'hint'}",
         ("forced " if forced else "waiting ") + ("fight" if fight else "talk"),
     )
-    if "~" in shot.rows[SIGN_ROW].strip("~ "):
-        g.step(8)  # read mid-redraw: once more
-        shot.rows[SIGN_ROW] = g.row(SIGN_ROW)
+    for _ in range(3):
+        partial = shot.rows[SIGN_ROW].strip("~ ")
+        if "~" in partial or not partial:
+            g.step(8)  # read mid-redraw (or on a blank frame): again
+            shot.rows[SIGN_ROW] = g.row(SIGN_ROW)
     sign = shot.rows[SIGN_ROW]
     # While an element is held, a waiting visitor shows by its sprite alone (the sign row keeps the mix cues).
     held = g.slot_a() != NO_SLOT
@@ -511,9 +582,16 @@ def encounter(g: Game, tag: str, how: Literal["approach", "wait"]) -> bool:
 
     `how`: 'approach' presses toward it (UP for a talk, DOWN for a fight), 'wait' lets it come. Whether it was a fight.
     """
+    if g.screen != BENCH:
+        # A secret's visitor walked in first: its talk ends, and the encounter may still be waiting.
+        g.settle()
+        g.step(30)
     flow = g.flow()
+    kind = flow["force"] or flow["hint"]
+    if not kind:
+        return False
     forced = bool(flow["force"])
-    fight = (flow["force"] or flow["hint"]) == FLOW_FIGHT
+    fight = kind == FLOW_FIGHT
     before = (g.focus(), g.slot_a())
     check_sign(g, tag, forced, fight)
     if how == "approach":
@@ -564,6 +642,7 @@ def phase_menu(ctx: Context) -> None:
         g.pulse("start")
         g.wait_screen(MENU, 600)
         g.step(60)
+        g.wait_menu_item("RESUME", 300)  # a busy frame can hold back the menu's draw
         pause = g.menu_items()
         lcdc = g.m[LCDC]
         ctx.check(
@@ -600,6 +679,13 @@ def free_first_bench(g: Game) -> None:
     g.pulse("down")
     g.step(20)
     g.pulse("a")
+    g.step(20)
+    asks = g.asks(shots=True, birthday=BIRTHDAY)
+    g.ctx.check(
+        "free: the first game start asks the date and time, then the birthday",
+        asks == ["date", "birthday"],
+        str(asks),
+    )
     g.wait_screen(BENCH, 3000)
     g.step(500)
     shot = g.snap("bench", "the first bench")
@@ -905,18 +991,18 @@ def phase_story(ctx: Context) -> None:
 
 def phase_return(ctx: Context) -> None:
     if "free" in ctx.saves:
-        g = Game(ctx, "return", ctx.saves["free"])
+        # A host (the website's emulator) leaves a host clock block hours after the saved clock: nothing asks, and the
+        # time away is real.
+        ram = bytearray(ctx.saves["free"])
+        date, minute = saved_clock(ram)
+        write_host_clock(ram, date, minute + TIME_AWAY_HOURS * 60)
+        g = Game(ctx, "return", bytes(ram))
         g.wait_screen(MENU, 6000)
         g.step(240)
-        # The time ask (day, hour, minute): RIGHT to the hour, UP once per hour away.
-        g.pulse("right")
-        g.step(10)
-        for _ in range(TIME_AWAY_HOURS):
-            g.pulse("up", 4)
-        g.snap("time-ask", "coming back: five hours later")
-        g.pulse("a")
-        g.step(120)
+        shot = g.snap("title-return", "coming back: the title card asks nothing")
+        ctx.check("return: no ask on the title", not any("WHAT" in row for row in shot.rows.values()))
         g.free_play()
+        ctx.check("return: no ask at the game start either", not g.seen_asks, str(g.seen_asks))
         g.until(lambda: g.flow_byte("hint") == FLOW_TALK, 900)
         g.step(30)
         shot = g.snap("bench", "back after hours: someone waits above")
@@ -932,6 +1018,49 @@ def phase_return(ctx: Context) -> None:
         g.snap("bench", "the saved run resumed")
         ctx.check("resume: the story slot loads", resumed and g.story_on() == 1)
         g.stop()
+
+
+def saved_clock(ram: bytes | bytearray) -> tuple[int, int]:
+    """The newest valid time record's date (days since 2000-01-01) and minute of the day."""
+    best: bytes | bytearray | None = None
+    for offset in TIME_RECORDS:
+        at = TIME_BANK * SRAM_BANK_SIZE + offset
+        record = ram[at : at + TIME_RECORD_SIZE]
+        if record[0:2] != TIME_MAGIC or record[27] != TIME_COMMIT:
+            continue
+        # The serial wraps: the newer record is the one at most half the range ahead.
+        if best is None or (le16(record, 4) - le16(best, 4)) & 0x8000 == 0:
+            best = record
+    if best is None:
+        raise ValueError("the save has no valid time record")
+    return le16(best, 10), le16(best, 6)
+
+
+def write_host_clock(ram: bytearray, date: int, minute: int) -> None:
+    """Write the host clock block for `date` (days since 2000-01-01) plus `minute` (may run past the day)."""
+    date += minute // MINUTES_PER_DAY
+    minute %= MINUTES_PER_DAY
+    day = EPOCH + datetime.timedelta(days=date)
+    block = bytearray(HOST_CLOCK_MAGIC)
+    block += bytes([HOST_CLOCK_VERSION, 0, day.year & 0xFF, day.year >> 8, day.month, day.day])
+    block += bytes([minute // 60, minute % 60, 0, 0])  # hour, minute, second, reserved
+    block += crc16_ccitt(block).to_bytes(2, "little")
+    at = TIME_BANK * SRAM_BANK_SIZE + HOST_CLOCK_AT
+    ram[at : at + len(block)] = block
+
+
+def crc16_ccitt(data: bytes | bytearray) -> int:
+    """CRC-16/CCITT-FALSE: poly 0x1021, init 0xFFFF, no reflection, no final XOR."""
+    crc = 0xFFFF
+    for byte in data:
+        crc ^= byte << 8
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x1021) & 0xFFFF if crc & 0x8000 else (crc << 1) & 0xFFFF
+    return crc
+
+
+def le16(data: bytes | bytearray, at: int) -> int:
+    return data[at] | data[at + 1] << 8
 
 
 PHASES: dict[str, Callable[[Context], None]] = {

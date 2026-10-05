@@ -6,7 +6,7 @@ data points. Every number below was measured. Simulator numbers come from real e
 checked. SM83 numbers are exact CPU clocks from the GBDK 4.5 builds running in PyBoy 2.7. The C module
 (`core/test/reference/crucible_play.c`) and an independent reference implementation produce byte-identical saves.
 
-The shipped catalogue (5,668 ids, 13,532 recipes) is past v4's limits, so the cartridge stores the same areas in the
+The shipped catalogue (5,629 ids, 13,439 recipes) is past v4's limits, so the cartridge stores the same areas in the
 WIDE placement and saves v5 (`core/include/crucible_core.h`, "Where the play memory sits"); the record, journal and
 filter design below are unchanged by that.
 

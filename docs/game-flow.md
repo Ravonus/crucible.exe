@@ -283,6 +283,12 @@ ledger's stats), `SETUP`, and the sixth cell: `SEND` while linked, `LEAVE` on th
 (the cursor skips it). The time's special minute turns RESUME/PLAY into WAKE. HOW TO PLAY's pages say the
 grammar and, cryptically, the encounters: "NOT ALONE. A FACE ABOVE? PRESS UP. EYES BELOW? PRESS DOWN."
 
+**The title card asks nothing.** The time ask left the power-on flow: the first time a story run or free play is
+started from PLAY on a cartridge whose clock was never set, the menu asks the date and time (WHAT IS TODAY?) and then
+the birthday, once each, then the sign loader (about a second) opens the game; later starts show only the loader. A
+link session never asks. A host (the website) can leave a HOST CLOCK block in SRAM so the date is never asked. Details:
+`time-awareness.md`. On a fresh cartridge the harnesses (`test/harness`) answer the two asks after choosing a game.
+
 ## Systems kept
 
 | System           | Where it surfaces                                                                                                                                                            |

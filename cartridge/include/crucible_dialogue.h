@@ -20,6 +20,7 @@ uint8_t dialogue_hint(crucible_story *, uint8_t, uint16_t, const char *const *, 
  * 2 a stutter, 4 the room flickers (consumed when read) */
 uint8_t dialogue_cursor(void) BANKED;
 uint8_t dialogue_cue(void) BANKED;
+uint8_t dialogue_last_act(void) BANKED; /* the last answer's story act (CRU_ACT_*, 0xff none) */
 /* typing: a speaker's temperament, base quarter-frames per letter, and each letter's cost */
 uint8_t dialogue_temper(crucible_story *, uint8_t) BANKED;
 uint8_t dialogue_type_base(uint8_t, uint16_t) BANKED;

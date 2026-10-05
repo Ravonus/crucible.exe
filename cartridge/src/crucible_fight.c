@@ -1045,6 +1045,7 @@ void fight_open(uint8_t f, uint8_t level, uint8_t nemesis) BANKED {
   fbui_open((uint8_t)(f & 7u), level, nemesis);
 }
 static uint8_t finish(uint8_t r) { /* the fight is over: palette 4 back */
+  if (r == FIGHT_WON) time_mark_act(); /* a win the minute before an angel minute calls someone in */
   avatar_bg_end();
   avatar_still = 0;
   if (fight_kind == FK_BOSS) link_scene_end();

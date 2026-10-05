@@ -23,6 +23,7 @@
 #include "crucible_overlay.h"
 #include "crucible_room.h"
 #include "crucible_flow.h"
+#include "crucible_sky.h"
 void reveal_prepare(uint16_t id, uint8_t variant) BANKED; /* crucible_reveal.c: the result turns out of the glitch */
 uint8_t reveal_turn(void) BANKED;
 #define REPEAT_DELAY 15u
@@ -1321,8 +1322,22 @@ static void tick_bench(void) {
   }
   arrow(1);
 }
+static uint8_t load_k; /* a game start waiting behind the sign loader (crucible_sky.c) */
 static void tick_menu(void) {
-  uint8_t k = menu_tick(pressed);
+  uint8_t k;
+  if (load_k) {
+    if (!sky_loader_tick()) return;
+    k = load_k;
+    load_k = 0;
+  } else {
+    k = menu_tick(pressed);
+    if (k == MENU_FREE || k == MENU_STORY_LOAD || k == MENU_STORY_NEW) {
+      load_k = k;
+      bust_hide();
+      sky_loader_open();
+      return;
+    }
+  }
   if (k == MENU_RESUME)
     to_bench();
   else if (k == MENU_FREE) {
@@ -1582,7 +1597,7 @@ void crucible_run(void) BANKED {
     if (screen == BENCH || screen == MERGE || screen == REVEAL)
       room(1);
     else if (screen == MENU) {
-      bust_tick();
+      if (!load_k) bust_tick();
       bands_tick(dt);
     }
     cells_update(screen == MERGE ? 0u : 2u);

@@ -150,6 +150,8 @@ static void lean_cell(crucible_story *s, uint8_t cell) {
   else if (KDC_H3[cell] == 2u)
     cru_story_act(s, CRU_ACT_HIT);
 }
+static uint8_t last_act_ = 0xffu;
+uint8_t dialogue_last_act(void) BANKED { return last_act_; } /* the last answer's story act (0xff none) */
 uint8_t dialogue_answer(crucible_story *s, uint8_t who, uint8_t choice, const char *const *slots, char *out) BANKED {
   uint8_t *st = STATE(s), f = (uint8_t)(who - 1u), action = choice < 3u ? choices_[choice].action : KDC_REFUSE,
           r = CRU_REACT_COLD, cls, att, before, after, turned = 0, last_who, last, deep, say, special, tag;
@@ -201,6 +203,7 @@ uint8_t dialogue_answer(crucible_story *s, uint8_t who, uint8_t choice, const ch
     }
   }
   if (e->lucid) cru_story_lucid(s, e->lucid);
+  last_act_ = e->act;
   if (e->act != 0xffu) cru_story_act(s, e->act);
   kdc_commit(st, dialogue_actions, action, key, compatible_);
   after = kdc_cell(st);

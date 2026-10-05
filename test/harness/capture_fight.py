@@ -50,7 +50,7 @@ def main() -> None:
             }
         )
 
-    game.accept_clock()
+    game.power_on()
     game.pulse("a")  # PLAY
     game.step(240)
     snap("play-menu")

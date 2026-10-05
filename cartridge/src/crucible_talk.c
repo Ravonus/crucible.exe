@@ -21,6 +21,8 @@
 #include "crucible_storyrun.h"
 #include "crucible_dialogue.h"
 #include "crucible_player.h"
+#include "crucible_time.h"
+#include "crucible_sky.h"
 #define T_CREAM 7u
 #define T_BRASS 15u
 #define X0 1u
@@ -289,6 +291,41 @@ static void say_id(uint16_t id, uint8_t g) {
   len_ = crucible_text_line(id, line_, sizeof line_, slots_);
   line_start(g);
 }
+/* Rare moments (docs/time-awareness.md): mode 1, about one talk in 32, the greeting gives way to a line about
+ * the day's sky, the player's sign or nothing in particular (flavour only); mode 2, a talk at an angel minute, and mode
+ * 3, one called in by a count on the shelf: a greeting with the number ({SECTOR}), a lead before the question, a line
+ * after the answer, and the answer leans the truth matrix once more: one extra cru_story_act, the answer's own act or, if it
+ * has none, AGREE or REFUSE by how it was taken (+3 per truth cell that act leans; once per talk). */
+uint8_t talk_mode; /* this talk's: 0 ordinary, 1 flavour, 2 an angel minute, 3 a count (global for the tests) */
+#define mode_ talk_mode
+static uint16_t angel_count_, last_flavour_ = 0xffffu;
+uint8_t talk_angel_nudges; /* for the tests: extra leanings given */
+uint8_t talk_test_mode = 0xffu; /* a test harness may force the next talk's mode (0xff: the game decides) */
+void talk_angel(uint16_t count) BANKED { angel_count_ = count; }
+static void num_(char *o, uint16_t n) {
+  char t[6];
+  uint8_t k = 0;
+  do {
+    t[k++] = (char)('0' + n % 10u);
+    n /= 10u;
+  } while (n && k < 5u);
+  while (k) *o++ = t[--k];
+  *o = 0;
+}
+static uint16_t flavour_(void) {
+  crucible_time_ctx c;
+  uint8_t e, g;
+  uint16_t id;
+  crucible_time_context(&c);
+  e = sky_event(&c);
+  g = time_sign();
+  id = e                          ? (uint16_t)(EV_SKY_FIRST + e - 1u)
+       : g < 12u && (roll() & 1u) ? (uint16_t)(EV_SIGN_FIRST + g)
+                                  : (uint16_t)(EV_MYSTIC_FIRST + roll() % EV_MYSTIC_N);
+  if (id == last_flavour_)
+    id = (uint16_t)(EV_MYSTIC_FIRST + (last_flavour_ == EV_MYSTIC_FIRST ? 1u : 0u)); /* never the same twice running */
+  return last_flavour_ = id;
+}
 static uint8_t opened_;
 static void saga_init(uint16_t seed) {
   (void)seed;
@@ -305,6 +342,24 @@ static void saga_init(uint16_t seed) {
 /* Lore is where the truth leaks: at first only unaware small talk (you do not know you are stuck); later, now and
  * then, a clue about whatever your play leans to (cru_saga.c's truth matrix). */
 static void say(uint8_t intent) {
+  if (mode_ >= 2u && !egg_mode_ && !intro_) {
+    if (intent == SAY_GREET) {
+      say_id(mode_ == 3u ? EV_COUNT_FIRST : (uint16_t)(EV_ANGEL_FIRST + roll() % EV_ANGEL_N), 0);
+      return;
+    }
+    if (intent == SAY_LORE) {
+      say_id((uint16_t)(EV_LEAD_FIRST + roll() % EV_LEAD_N), 0);
+      return;
+    }
+    if (intent == SAY_GLITCH) {
+      say_id((uint16_t)(EV_AFTER_FIRST + roll() % EV_AFTER_N), 0);
+      return;
+    }
+  }
+  if (mode_ == 1u && intent == SAY_GREET && !egg_mode_ && !intro_) {
+    say_id(flavour_(), 0);
+    return;
+  }
   if (intent == SAY_GREET && !egg_mode_ && !intro_ && dialogue_hint(&saga_, who_, roll(), slots_, line_)) {
     len_ = (uint8_t)strlen(line_);
     line_start(0);
@@ -527,6 +582,36 @@ static void open_(uint16_t seed, uint8_t sector, uint8_t egg) {
     return;
   }
   text_((uint8_t)(19u - strlen(KIND[who_])), 0, KIND[who_], (uint8_t)strlen(KIND[who_]), T_BRASS);
+  {
+    crucible_time_ctx c;
+    crucible_time_context(&c);
+    mode_ = 0;
+    if (angel_count_) {
+      mode_ = 3;
+      num_(sector_, angel_count_);
+      angel_count_ = 0;
+    } else if ((c.flags & CT_F_KNOWN) && CT_ANGEL(c.special)) {
+      uint8_t h = (uint8_t)(c.hour % 12u);
+      char *e;
+      mode_ = 2;
+      num_(sector_, h ? h : 12u);
+      e = sector_ + strlen(sector_);
+      e[0] = ':';
+      e[1] = (char)('0' + c.minute / 10u);
+      e[2] = (char)('0' + c.minute % 10u);
+      e[3] = 0; /* 11:11 */
+      if (roll() & 1u) {
+        text_(11, 0, " ", 9, T_CREAM);
+        text_((uint8_t)(19u - strlen(sector_)), 0, sector_, (uint8_t)strlen(sector_), T_BRASS);
+      }
+    } /* now and then the time sits in the corner */
+    else if (!(roll() & 31u))
+      mode_ = 1;
+    if (talk_test_mode != 0xffu) {
+      mode_ = talk_test_mode;
+      talk_test_mode = 0xffu;
+    }
+  }
   text_(1, 9, "HELD:", 5, T_CREAM);
   text_(7, 9, gift_, 12, T_BRASS);
   dialogue_save(&saga_);
@@ -562,7 +647,11 @@ void talk_wait(void) BANKED {
   text_(2, 13, "BUILDING YOU.", 13, T_CREAM);
   text_(2, 15, "HOLD STILL...", 13, T_BRASS);
 }
-uint32_t talk_intro_hash(void) BANKED { return hash_; }
+/* the run's seed; the player's sign folds a few bits in (time_sign: nothing else of the birthday reaches the game) */
+uint32_t talk_intro_hash(void) BANKED {
+  uint8_t g = time_sign();
+  return g < 12u ? hash_ ^ ((uint32_t)(g + 1u) << 27) ^ ((uint32_t)(g + 1u) << 11) : hash_;
+}
 const char *talk_intro_name(void) BANKED { return typed_; }
 /* The machine at a turning point: an element lost to a miss, or the run over (kind STORY_LOSS / STORY_OVER). */
 void talk_lost_arm(uint16_t id) BANKED {
@@ -603,6 +692,13 @@ void talk_event(uint8_t kind, uint16_t item) BANKED {
 void talk_egg(uint8_t k) BANKED { open_((uint16_t)(0x5eedu ^ ((uint16_t)k * 977u)), 0, k); }
 static void react(void) {
   uint8_t r = dialogue_answer(&saga_, who_, reply_, slots_, line_);
+  time_mark_act();
+  if (mode_ >= 2u) {
+    uint8_t a = dialogue_last_act();
+    if (a == 0xffu) a = r >= CRU_REACT_WARM ? CRU_ACT_AGREE : CRU_ACT_REFUSE;
+    cru_story_act(&saga_, a);
+    talk_angel_nudges++;
+  } /* the led answer weighs once more: its own act, or how it was taken */
   len_ = (uint8_t)strlen(line_);
   standing();
   sound_play(r >= CRU_REACT_WARM ? SFX_MOVE : SFX_CLOSE);

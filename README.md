@@ -28,8 +28,9 @@ in any accurate CGB emulator and on hardware from a flash cart.
   because of what happens there, and the truth of where you are shifts with it.
 - **Visitors** generated on the cartridge: a name, an archetype, a face built from primitives, and a conversation that
   remembers you.
-- **Living rooms** that change with your save, the place and the hour, and a sense of time without a clock chip: it
-  notices when you have been away.
+- **Living rooms** that change with your save, the place and the hour, and a sense of time without a clock chip. It
+  asks the date once and your birthday, shows your sign as it loads, keeps a sky with the moon's phase, notices when
+  you have been away, and something stirs at the angel minutes (1:11, 3:33, 11:11...).
 - **Lost pieces.** Something you lose cools down before it can be made again, and the bench glitches when you try.
 - **Fights**: bosses that telegraph their moves, duels, a kit built from what you have made, and a face of your own.
 - **Link cable play** for two (below).
