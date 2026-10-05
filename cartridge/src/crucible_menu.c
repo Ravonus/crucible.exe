@@ -108,10 +108,15 @@ static void vol_bar(char *out, uint8_t v) {
   for (i = 0; i < VOL_STEPS; i++) out[i] = i < v ? '#' : '.';
   out[VOL_STEPS] = 0;
 }
-static const char *const help_lines[3][6] = {
-    {"PICK A THING", "A ADDS IT", "PICK ANOTHER", "A MIXES THEM", "B PUTS IT BACK", "1/3"},
-    {"ARROWS TURN", "THE SHELF", "UP/DOWN: GROUP", "SELECT: FILTER", "START: MENU", "2/3"},
-    {"NOT ALONE.", "A FACE ABOVE?", "PRESS UP.", "EYES BELOW?", "PRESS DOWN.", "3/3"}};
+#define HELP_PAGES 7u
+static const char *const help_lines[HELP_PAGES][6] = {
+    {"PICK A THING", "A ADDS IT", "PICK ANOTHER", "A MIXES THEM", "B PUTS IT BACK", "1/7"},
+    {"ARROWS TURN", "THE SHELF", "UP/DOWN: GROUP", "SELECT: FILTER", "START: MENU", "2/7"},
+    {"NOT ALONE.", "A FACE ABOVE?", "PRESS UP.", "EYES BELOW?", "PRESS DOWN.", "3/7"},
+    {"FACTIONS", "REMEMBER WHAT", "YOU MAKE/SAY.", "FRIENDS HELP.", "FOES MAY FIGHT.", "4/7"},
+    {"STORY VISITORS", "ALSO ARRIVE", "AT RANDOM.", "UP: TALK", "DOWN: FIGHT", "5/7"},
+    {"IGNORE OR JOIN", "RANDOM GUESTS.", "STORY FIGHTS", "MAY TAKE YOUR", "THINGS.", "6/7"},
+    {"YOUR AVATAR", "LOOK: BOY/GIRL", "SELECT: REROLL", "KEEPS THE LOOK", "A: KEEP FACE", "7/7"}};
 static const char *const reset_lines[5] = {"ERASE GAME?", "THINGS, BOOK,", "AWARDS, TITLES", "AND RUNS GO.",
                                            "SETTINGS STAY."};
 static void cursor(uint8_t row) {
@@ -904,7 +909,7 @@ uint8_t menu_tick(uint8_t pressed) BANKED {
   }
   if (pressed & J_A) {
     help++;
-    if (help >= 3u) {
+    if (help >= HELP_PAGES) {
       page = PAGE_SETTINGS;
       at = 4u;
     }

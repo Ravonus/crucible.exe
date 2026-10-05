@@ -1,6 +1,7 @@
 /* The avatar creator (docs/fight-system.md 8.2): a new story slot's face, built from the procedural generator.
  * It opens in the wake-up after the slot is named. The face is the talker's bust (the machine steps aside); nine rows
- * under it, each with what is open of it (3/8):
+ * under it, each with what is open of it (3/8), plus LOOK under the name, above the portrait.
+ * LOOK always offers DREAM (the seeded forms), BOY and GIRL; SELECT keeps this choice while rolling the rest:
  *   UP/DOWN     a row (a row the style fixes is skipped: a human's eyes are its own)
  *   LEFT/RIGHT  that row's open options; the face regenerates, torn in as it changes
  *   SELECT      dream it: a seeded roll within the open options (the old generator)
@@ -20,14 +21,15 @@
 #include "crucible_fight_rules.h"
 #define T_CREAM 7u
 #define T_BRASS 15u
-#define R0 8u /* the first row on screen */
+#define R0 8u /* the existing cosmetic rows stay in place */
+#define LOOK_ROW AV_ROWS /* LOOK occupies the old mood row, above the portrait */
 uint8_t av_genome[6], av_genome_set;
 /* the creator's own state lives in the fight engine's scratch (no fight runs during the wake-up): WRAM is tight */
 #define prev_ (fr_scratch)
 #define row_ (fr_scratch[6])
 #define undo_ (fr_scratch[7])
 #define n_ (fr_scratch[8])
-#define seed_ (*(uint16_t *)(fr_scratch + 9))
+static uint16_t edit_seed(void) { return (uint16_t)(fr_scratch[9] | ((uint16_t)fr_scratch[10] << 8)); }
 static const char LABEL[AV_ROWS][6] = {"STYLE", "HEAD", "EYES", "MOUTH", "CROWN", "MARK", "HUE", "GRAIN", "AURA"};
 static void put_(uint8_t x, uint8_t y, uint8_t tile, uint8_t attr) {
   VBK_REG = 1;
@@ -58,6 +60,10 @@ static void num_(char *o, uint8_t n) {
  * 3 mark | grain << 3 | size << 6; 4 aura */
 static uint8_t get_(uint8_t r) {
   uint8_t *g = av_genome;
+  if (r == LOOK_ROW) {
+    uint8_t look = (uint8_t)((g[5] & AV_LOOK_MASK) >> 3);
+    return look <= AV_LOOK_GIRL ? look : AV_LOOK_DREAM;
+  }
   switch (r) {
   case 0: return (uint8_t)(g[0] & 15u);
   case 1: return (uint8_t)(g[1] & 7u);
@@ -72,6 +78,11 @@ static uint8_t get_(uint8_t r) {
 }
 static void set_(uint8_t r, uint8_t v) {
   uint8_t *g = av_genome;
+  if (r == LOOK_ROW) {
+    g[5] = (uint8_t)((g[5] & (uint8_t)~AV_LOOK_MASK) | (uint8_t)(v << 3));
+    if (v) g[0] = (uint8_t)((g[0] & 0xf0u) | 1u); /* human, with all the seed's other choices intact */
+    return;
+  }
   switch (r) {
   case 0: g[0] = (uint8_t)((g[0] & 0xf0u) | v); break;
   case 1: g[1] = (uint8_t)((g[1] & 0xf8u) | v); break;
@@ -95,13 +106,18 @@ static void set_(uint8_t r, uint8_t v) {
  * wears none of its own */
 static uint8_t fixed_(uint8_t r) {
   uint8_t s = (uint8_t)(av_genome[0] & 15u);
+  if (r == 0u && get_(LOOK_ROW)) return 1; /* choose DREAM to return to the other forms */
   if (r == 2u) return s == 1u || s == 3u || s == 5u;
   if (r == 4u) return s == 2u || s == 3u || s == 7u || s == 8u;
   return 0;
 }
 /* the hue row has a 17th swatch once the DMG green was seen */
-static uint8_t count_(uint8_t r) { return (uint8_t)(player_row_count(r) + (r == 6u && (pl.flags & PF_DMG) ? 1u : 0u)); }
+static uint8_t count_(uint8_t r) {
+  if (r == LOOK_ROW) return 3;
+  return (uint8_t)(player_row_count(r) + (r == 6u && (pl.flags & PF_DMG) ? 1u : 0u));
+}
 static uint8_t open_(uint8_t r, uint8_t v) {
+  if (r == LOOK_ROW) return 1; /* never a level or unlock gate */
   return v >= player_row_count(r) ? 1u : player_unlocked((uint8_t)(player_row_base(r) + v));
 }
 static uint8_t open_count(uint8_t r) {
@@ -112,9 +128,19 @@ static uint8_t open_count(uint8_t r) {
 }
 static void row_draw(uint8_t r) {
   char s[18];
-  uint8_t y = (uint8_t)(R0 + r), on = r == row_, a = on ? T_BRASS : T_CREAM;
+  uint8_t y = r == LOOK_ROW ? 1u : (uint8_t)(R0 + r), on = r == row_, a = on ? T_BRASS : T_CREAM;
   text_(0, y, " ", 20, T_CREAM);
   if (on) put_(1, y, GLYPH('>'), T_BRASS);
+  if (r == LOOK_ROW) {
+    static const char *const LOOK[3] = {"DREAM", "BOY", "GIRL"};
+    text_(2, y, "LOOK", 4, a);
+    text_(10, y, LOOK[get_(r)], 5, a);
+    if (on) {
+      put_(9, y, UI_LEFT, T_BRASS);
+      put_(16, y, UI_RIGHT, T_BRASS);
+    }
+    return;
+  }
   text_(2, y, LABEL[r], 5, a);
   if (fixed_(r))
     text_(10, y, "--", 2, T_CREAM);
@@ -134,6 +160,7 @@ static void row_draw(uint8_t r) {
 }
 static void draw_all(void) {
   uint8_t r;
+  row_draw(LOOK_ROW);
   for (r = 0; r < AV_ROWS; r++) row_draw(r);
   text_(0, 17, " ", 20, T_CREAM);
   put_(0, 17, UI_A, T_CREAM);
@@ -160,10 +187,12 @@ static uint8_t step_(uint8_t r, int8_t d) {
 void av_edit_open(uint16_t seed) BANKED {
   player_story_load(menu_slot, seed);
   memcpy(av_genome, pl.genome, 6);
-  row_ = 0;
+  row_ = LOOK_ROW;
   undo_ = 0;
   n_ = 0;
-  seed_ = seed ? seed : 0x5eedu;
+  if (!seed) seed = 0x5eedu;
+  fr_scratch[9] = (uint8_t)seed;
+  fr_scratch[10] = (uint8_t)(seed >> 8);
   av_genome_set = 0;
   face_();
   draw_all();
@@ -190,8 +219,7 @@ uint8_t av_edit_tick(uint8_t pressed) BANKED {
   }
   if (pressed & (J_UP | J_DOWN)) {
     do {
-      row_ = pressed & J_UP ? (uint8_t)(row_ ? row_ - 1u : AV_ROWS - 1u)
-                            : (uint8_t)(row_ + 1u == AV_ROWS ? 0u : row_ + 1u);
+      row_ = pressed & J_UP ? (uint8_t)(row_ ? row_ - 1u : LOOK_ROW) : (uint8_t)(row_ == LOOK_ROW ? 0u : row_ + 1u);
     } while (fixed_(row_));
     sound_play(SFX_MOVE);
     row_draw(r);
@@ -211,9 +239,10 @@ uint8_t av_edit_tick(uint8_t pressed) BANKED {
   } else if (pressed & J_SELECT) {
     memcpy(prev_, av_genome, 6);
     undo_ = 1;
-    player_genome_roll(av_genome, (uint16_t)(seed_ ^ (uint16_t)((uint16_t)(++n_) * 0x9e37u)));
+    player_genome_roll(av_genome, (uint16_t)(edit_seed() ^ (uint16_t)((uint16_t)(++n_) * 0x9e37u)));
     av_genome[4] = (uint8_t)((av_genome[4] & 7u) | (prev_[4] & 0xf8u));
-    av_genome[5] = prev_[5]; /* the mark and the secret bits are earned, never rolled */
+    av_genome[5] = prev_[5]; /* LOOK, the mark and secret bits are kept, never rolled */
+    if (get_(LOOK_ROW)) set_(LOOK_ROW, get_(LOOK_ROW));
   } else
     return 0;
   sound_play(SFX_SWAP);

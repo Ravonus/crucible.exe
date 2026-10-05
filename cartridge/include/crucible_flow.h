@@ -21,6 +21,8 @@ extern uint8_t flow_arg; /* the fight: faction | 0x80 nemesis */
 extern uint8_t flow_pending; /* the view went this way (FLOW_UP / FLOW_DOWN) and pans back on the next bench */
 extern uint8_t flow_since; /* mixes since the last encounter */
 extern uint8_t flow_count; /* encounters this power-on (talks + fights), for tests and pacing */
+extern uint8_t flow_ambient; /* a random arrival: optional, ignoring it has no penalty */
+extern uint16_t flow_idle_left; /* bench frames until the next random arrival */
 extern uint8_t flow_fgap, flow_tgap; /* mixes since the last fight / talk */
 /* After a mix's story reaction (STORY_*): returns STORY_LOSS / STORY_OVER for the cartridge to act on at once (the
  * machine's own lines), and queues everything else (visits, champions, chapter beats, rivals) as a hint or a force. */

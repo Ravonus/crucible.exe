@@ -59,7 +59,7 @@ power-on ─ WHAT TIME IS IT? ─ TITLE: PLAY · BOOK · TITLES · STATS · SETU
   │   a face peeks in above ──UP──> pan up ──> TALK ──> pan back ──┐       │
   │   eyes at the floor's edge ──DOWN──> pan down ──> FIGHT ─> pan back ─┤  │
   │   "!! IT COMES !!" / "SOMEONE STEPS IN" (2 s) ──> pan ──> FIGHT/TALK ─┤ │
-  │   ignored hints fade after ~20 s (a run notices)                        │
+  │   ignored hints fade after ~20 s (progression notices)                        │
   │   chapters advance from talks; each new chapter sends its gatekeeper    │
   └────────────────────────────────────────────────────────────── same bench┘
 ```
@@ -103,6 +103,20 @@ with the map), the toast window is hidden, and the last frames tear sideways. Th
 (`fight_go` / `talk_enter`), and SCY returns to 0. Coming back (`to_bench`), the bench is drawn with the view still in
 the corridor and pans home. Presses made during a pan are dropped (an A that closed a talk must not ADD on the bench).
 
+### Random story arrivals
+
+In Story, a separate clock brings a visitor or champion after about 18..44 seconds of active bench time, even on a
+friendly starter-only save. It pauses in menus, recipes, reveals and encounters, and while linked. A random arrival
+uses the existing UP/DOWN cue and waits for an approach; it never forces a scene, and ignoring it has no standing or
+lucidity penalty. At most two random arrivals of one kind occur before the other gets a turn. Its next interval begins
+after the encounter or the hint fades. Boss faction and timing come from the director's seed, without requiring a
+DREAM discovery, a previous duel or hostile standing. Existing progression encounters retain their triggers and stakes.
+Free Play keeps its existing visitors and has no bosses.
+
+Conversation headers name both faction and attitude, such as `PROGRAM: FRIEND`. HOW TO PLAY explains that making and
+answering affect standing, friendly factions help, and hostile factions may fight. It also explains optional arrivals,
+the cost of Story fights, and the avatar's LOOK and reroll controls. These are existing screen and help-page locations.
+
 ### Triggers and pacing (seeded)
 
 Rolls use a xorshift seeded from the bench's stirred rng (`core.rng`, moved by every press) and DIV; the story's own
@@ -119,7 +133,7 @@ signals (`story_after_mix`) come from the run. Counts are in makes (mixes).
 | **A new chapter** (the dialogue cadence advanced it during a talk)                                                    | story                    | chapter 1: a forced talk; chapter 2+: a forced fight with its gatekeeper (a rival, else the coldest faction) | two makes after the chapter turns                                                                                                     |
 | **Back after hours or more** (the power-on answer: `CT_AWAY_HOURS`, `_DAY`, `_WEEK`, within the 10 returning minutes) | both                     | a talk waiting above                                                                                         | once per power-on                                                                                                                     |
 | **A special minute** (1:11, 3:33, 4:04, 11:11, midnight...)                                                           | both                     | a talk waiting above                                                                                         | once per special minute                                                                                                               |
-| Ignored waiting hint                                                                                                  | story                    | (fades)                                                                                                      | a fighter: that faction's standing -3 (the grudge grows); a talker: the act `CRU_ACT_IDLE` (the dream leans to standing still)        |
+| Ignored progression hint                                                                                              | story                    | (fades)                                                                                                      | a fighter: that faction's standing -3 (the grudge grows); a talker: the act `CRU_ACT_IDLE` (the dream leans to standing still)        |
 
 Never: a fight in free play (fights cost elements; the Classic save is never at stake), any encounter in a race or a fight session (a co-op session keeps them: its bosses are shared), a
 hint over the room's door anomaly (UP is the door's while it shows), two encounters at once.

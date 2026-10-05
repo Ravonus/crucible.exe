@@ -8,8 +8,9 @@
  *     floor's edge (something hostile, DOWN), with the sign row saying so. Approach it with UP or DOWN; ignored, it
  *     fades after about twenty seconds, and a run notices (a rival's grudge grows; a voice ignored leans the dream to
  *     standing still).
- * Fights only happen in a story run (they cost elements; free play's save is never at stake) and never while linked.
- * Free play gets visitors only. Pacing and triggers are in docs/game-flow.md.
+ * Progression fights keep the story's stakes. Random visitors and bosses also wait at the edge after a quiet,
+ * variable interval of story bench time; ignoring them costs nothing. Free play keeps its existing visitors.
+ * Random arrivals pause outside the bench and while linked. Pacing and triggers are in docs/game-flow.md.
  *
  * The approach pans the background (SCY) 112 pixels into the hidden map rows 18..31, painted as a fluorescent corridor
  * (noclipping), with sprites off; the cartridge then opens the talk or fight and sets SCY back. Coming back, the bench is
@@ -42,7 +43,11 @@ extern uint8_t win_pos_y; /* main.c: the toast window's position (144: off) */
 uint8_t room_door(void) BANKED; /* crucible_room.c: the door anomaly shows (UP is its) */
 uint8_t flow_hint, flow_force, flow_arg, flow_pending, flow_since = 4u, flow_count, flow_fgap = 6u, flow_tgap = 4u;
 static uint8_t owe, inited, last, fc, poll, dirty, vis, beat = 0xffu, chap_seen = 0xffu, story_seen, time_done, sp_seen;
+uint8_t flow_ambient; /* the current hint arrived by time: optional, with no ignored penalty */
+uint16_t flow_idle_left; /* bench frames until a random arrival (never saved) */
+static uint8_t ambient_prev, ambient_streak;
 static uint16_t t, seed = 0x51f7u;
+static void ambient_arm(void);
 static void put_(uint8_t x, uint8_t y, uint8_t tile, uint8_t attr) {
   VBK_REG = 1;
   set_bkg_tiles(x, y, 1, 1, &attr);
@@ -73,11 +78,14 @@ static void field_(uint8_t x, uint8_t y, uint8_t width, const char *s, uint8_t a
 /* a seeded roll: the run's seed and the bench's stirred rng */
 static uint8_t roll(void) {
   seed ^= (uint16_t)core.rng;
+  if (!seed) seed = 0x51f7u;
   seed ^= seed << 7;
   seed ^= seed >> 9;
   seed ^= seed << 8;
   return (uint8_t)seed;
 }
+/* About 18..44 seconds of bench time, independent of recipes, standing and discoveries. */
+static void ambient_arm(void) { flow_idle_left = (uint16_t)(1080u + (uint16_t)roll() * 6u); }
 /* the hint tiles (2bpp, OBJ palette 4: cyan, white, magenta): a head peeking down with its eyes, and a lurker's horns */
 static const uint8_t TILES[32] = {0x3c, 0x00, 0x7e, 0x00, 0xff, 0x00, 0x99, 0x66, 0xbb, 0x66, 0xff,
                                   0x00, 0x7e, 0x00, 0x18, 0x00, 0x81, 0x81, 0xc3, 0xc3, 0x7e, 0x7e,
@@ -217,7 +225,8 @@ static uint8_t go(uint8_t kind) {
   for (i = 0; i < 40u; i++) move_sprite(i, 0, 0); /* the next scene places its own */
   LCDC_REG |= LCDCF_OBJON;
   flow_pending = d;
-  flow_hint = flow_force = 0;
+  flow_hint = flow_force = flow_ambient = 0;
+  ambient_arm();
   flow_since = 0;
   vis = 0;
   flow_count++;
@@ -247,13 +256,16 @@ void flow_back(uint8_t phase) BANKED {
 /* ---- deciding ---- */
 static void wait_(uint8_t kind) {
   flow_hint = kind;
+  flow_ambient = 0;
+  ambient_arm();
   t = 0;
   dirty = 1;
   vis = 0;
 }
 static void force_(uint8_t kind) {
   flow_force = kind;
-  flow_hint = 0;
+  flow_hint = flow_ambient = 0;
+  ambient_arm();
   t = 0;
   dirty = 1;
   sound_play(SFX_DENY);
@@ -334,7 +346,7 @@ uint8_t flow_after_mix(uint8_t r) BANKED {
     r = STORY_VISIT; /* a visit that could not come yet is kept, not lost */
   if (flow_force) return 0;
   if (flow_hint) { /* someone already waits; a hostile champion loses patience */
-    if (r == STORY_BOSS && flow_hint == FLOW_FIGHT && flow_fgap >= FIGHT_FORCE) force_(FLOW_FIGHT);
+    if (!flow_ambient && r == STORY_BOSS && flow_hint == FLOW_FIGHT && flow_fgap >= FIGHT_FORCE) force_(FLOW_FIGHT);
     return 0;
   }
   if (story_on && beat != 0xffu) {
@@ -404,12 +416,33 @@ uint8_t flow_after_mix(uint8_t r) BANKED {
 static void ignored(void) {
   crucible_story *s = talk_saga();
   uint8_t f = flow_arg & 7u;
-  if (!story_on) return;
+  if (!story_on || flow_ambient) return;
   if (flow_hint == FLOW_FIGHT && f < CRU_FACTIONS)
     s->stand[f] = s->stand[f] > -97 ? (int8_t)(s->stand[f] - 3) : -100; /* hiding: the grudge grows */
   else
     cru_story_act(s, CRU_ACT_IDLE); /* a voice ignored: standing still */
   story_save();
+}
+/* Random arrivals use the same hints, never force a scene or require a mix. After two of one kind, the other
+ * gets the next turn so a quiet, friendly starter-only save cannot starve its bosses. */
+static void ambient_tick(uint8_t dt) {
+  uint8_t kind, f;
+  if (!story_on || link_on || flow_hint || flow_force) return;
+  if (flow_idle_left > dt) {
+    flow_idle_left -= dt;
+    return;
+  }
+  kind = (roll() & 1u) ? FLOW_TALK : FLOW_FIGHT;
+  if (ambient_streak >= 2u && kind == ambient_prev) kind = kind == FLOW_TALK ? FLOW_FIGHT : FLOW_TALK;
+  ambient_streak = kind == ambient_prev ? (uint8_t)(ambient_streak + 1u) : 1u;
+  ambient_prev = kind;
+  if (kind == FLOW_FIGHT) {
+    do f = (uint8_t)(roll() & 7u);
+    while (f >= CRU_FACTIONS);
+    flow_arg = f; /* an actual champion, independent of the progression's tutorial/DREAM gate */
+  }
+  wait_(kind);
+  flow_ambient = 1;
 }
 /* the clock: back after hours or more, or a special minute, someone is waiting */
 static void time_check(void) {
@@ -437,11 +470,19 @@ uint8_t flow_tick(uint8_t screen, uint8_t *pressed) BANKED {
     VBK_REG = 0;
     set_sprite_data(FLOW_TILE, 2, TILES);
     seed ^= (uint16_t)DIV_REG << 8;
-    story_seen = story_on;
+    story_seen = story_on ? (uint8_t)(story_slot_at + 1u) : 0u;
+    ambient_prev = ambient_streak = 0;
+    ambient_arm();
   }
-  if (story_on != story_seen || (link_on && !(link_started && link_mode == LINK_COOP))) {
-    story_seen = story_on;
-    flow_hint = flow_force = owe = 0;
+  if ((story_on ? (uint8_t)(story_slot_at + 1u) : 0u) != story_seen ||
+      (link_on && !(link_started && link_mode == LINK_COOP))) {
+    story_seen = story_on ? (uint8_t)(story_slot_at + 1u) : 0u;
+    flow_hint = flow_force = flow_ambient = owe = 0;
+    ambient_prev = ambient_streak = 0;
+    ambient_arm();
+    flow_since = flow_tgap = 4u;
+    flow_fgap = 6u;
+    time_done = sp_seen = flow_gauntlet = 0;
     beat = chap_seen = 0xffu;
     dream_seen = 0;
   } /* a run left or begun: nothing carries over (a co-op session keeps its encounters: they become shared, 9.4) */
@@ -466,6 +507,7 @@ uint8_t flow_tick(uint8_t screen, uint8_t *pressed) BANKED {
   /* an angel minute after something meaningful (or a count on the shelf): someone steps in, at most once; never while
    * linked, never over one already waiting (time-awareness.md) */
   if (time_angel_take() && !flow_hint && !flow_force && !link_on) force_(FLOW_TALK);
+  ambient_tick(dt);
   if (flow_force) { /* telegraphed: it comes by itself, or at once if you go to it */
     dir = flow_force == FLOW_TALK ? J_UP : J_DOWN;
     t += dt;
@@ -511,7 +553,8 @@ uint8_t flow_tick(uint8_t screen, uint8_t *pressed) BANKED {
   }
   if (t >= LIFE) {
     ignored();
-    flow_hint = 0;
+    flow_hint = flow_ambient = 0;
+    ambient_arm();
     vis = 0;
     hide();
     sign_idle();

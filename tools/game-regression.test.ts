@@ -1,4 +1,4 @@
-/** Execute the cartridge modules with sanitizers: independent run clocks and audible music beneath every cue. */
+/** Execute cartridge behavior with sanitizers: run clocks, layered music, arrivals and seeded avatar choices. */
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
@@ -22,6 +22,7 @@ function runModule(file: string, before: string, after: string): void {
       [
         "-std=c++17",
         "-fsanitize=address,undefined",
+        "-fno-sanitize-recover=all",
         "-g",
         "-I" + dir,
         "-I" + join(root, "core/include"),
@@ -162,4 +163,286 @@ int main() {
 }
 `,
   );
+});
+
+await test("random bench encounters arrive without mixes or unlocks, remain optional and respect mode boundaries", () => {
+  runModule(
+    "crucible_flow.c",
+    String.raw`
+#include <stdint.h>
+#include <string.h>
+#include <assert.h>
+#define BANKED
+#include "crucible_core.h"
+#include "crucible_time.h"
+#include "crucible_flow.h"
+#define FLOW_TEST
+#define J_UP 4u
+#define J_DOWN 8u
+#define GLYPH(c) ((uint8_t)(c))
+#define UI_A 1u
+#define UI_B 2u
+#define SFX_SWAP 6u
+#define SFX_DENY 2u
+#define SFX_MOVE 1u
+#define PF_FIRST_DUEL 1u
+#define FIGHT_DUEL 8u
+#define LCD_EVENTS 4u
+#define LCD_OBJ_ON 2u
+#define LCDCF_OBJON 2u
+#define STORY_NONE 0u
+#define STORY_VISIT 3u
+#define STORY_BOSS 4u
+#define STORY_LOSS 1u
+#define STORY_OVER 2u
+#define LINK_COOP 0u
+#define LINK_FIGHT 2u
+static crucible_core core;
+static crucible_story saga;
+static struct { uint8_t flags; } pl;
+static uint16_t sys_time;
+static uint8_t story_on,story_slot_at,link_on,link_started,link_mode,flow_gauntlet,fight_dbg;
+static uint8_t VBK_REG,SCY_REG,SCX_REG,LCDC_REG,DIV_REG,lcd_kind[LCD_EVENTS],win_pos_y;
+static unsigned saves,ignored_acts;
+static crucible_story *talk_saga(void) { return &saga; }
+static void set_bkg_tiles(uint8_t,uint8_t,uint8_t,uint8_t,const uint8_t*) {}
+static void set_sprite_data(uint8_t,uint8_t,const uint8_t*) {}
+static void move_sprite(uint8_t,uint8_t,uint8_t) {}
+static void set_sprite_tile(uint8_t,uint8_t) {}
+static void set_sprite_prop(uint8_t,uint8_t) {}
+static void vsync(void) { sys_time++; }
+static void sound_tick(void) {}
+static void sound_play(uint8_t) {}
+static uint8_t input_take(void) { return 0; }
+static uint8_t room_door(void) { return 0; }
+static uint8_t player_xp(uint16_t) { return 0; }
+static uint16_t player_owned_next(uint16_t) { return 0; }
+static uint8_t fr_stance(uint16_t) { return 1; } // no DREAM discovery
+static uint8_t fight_rival(void) { return 255; } // no hostile or wary faction
+static void story_save(void) { saves++; }
+void cru_story_act(crucible_story*,uint8_t) { ignored_acts++; }
+void crucible_time_context(crucible_time_ctx *c) { memset(c,0,sizeof *c); }
+static uint8_t link_result(void) { return 0; }
+static uint8_t link_scene_pull(void) { return 0; }
+uint8_t time_angel_take(void) { return 0; }
+void time_mark_act(void) {}
+static void talk_angel(uint16_t) {}
+void time_angel_arm(void) {}
+static void fight_debug(void) {}
+static void crucible_get_name(uint16_t,char *out) { strcpy(out,"THING"); }
+uint8_t cru_filter_apply(crucible_core*,uint8_t) { return 1; }
+void cru_filter_close(crucible_core*) {}
+`,
+    String.raw`
+static void reset_test(uint8_t mode) {
+ memset(&core,0,sizeof core); memset(&saga,0,sizeof saga); pl.flags=0;
+ core.items=4; core.found[0]=4; core.slot_a=CRU_NONE; core.mix.result=CRU_NONE; core.rng=1234;
+ story_on=mode; story_slot_at=0; link_on=link_started=0; link_mode=0;
+ flow_hint=flow_force=flow_pending=0; flow_since=4;flow_fgap=6;flow_tgap=4;flow_count=0;
+ inited=0; last=0; sys_time=0; seed=0x51f7; beat=chap_seen=255; owe=0; saves=ignored_acts=0;
+}
+static uint8_t frame(uint8_t screen=0,uint8_t p=0) { sys_time++; return flow_tick(screen,&p); }
+int main() {
+ for(uint16_t run=1;run<=30;run++) {
+  reset_test(1); core.rng=(uint16_t)(run*127u);
+  unsigned first=0,boss=0,talks=0;
+  for(unsigned f=0;f<12000;f++) {
+   frame();
+   if(flow_hint) {
+    if(!first)first=f+1;
+    assert(!flow_force && !flow_count);
+    if(flow_hint==FLOW_FIGHT) { boss=f+1; assert(flow_arg<CRU_FACTIONS); break; }
+    talks++; assert(talks<=2);
+    for(unsigned k=0;k<1205 && flow_hint;k++)frame();
+   }
+  }
+  assert(first>=1080 && first<=2700 && boss); // starter-only idle play gets actual bosses
+  assert(flow_since==4 && flow_fgap==6 && !pl.flags); // no recipe or tutorial unlock was faked
+  assert(saves==0 && ignored_acts==0); // ignoring a random arrival costs nothing
+  assert(frame(0,J_DOWN)==FLOW_FIGHT && flow_count==1 && !flow_hint); // same existing approach
+  for(unsigned k=0;k<300;k++)frame();
+  assert(!flow_hint && !flow_force); // breath by time, even without more mixes
+ }
+ reset_test(0);
+ for(unsigned f=0;f<12000;f++)frame();
+ assert(!flow_hint && !flow_force && !flow_count); // Free Play keeps its existing visitor rules
+ reset_test(1);
+ for(unsigned f=0;f<6000;f++)frame(5); // menus do not consume encounter time
+ assert(!flow_hint);
+ for(unsigned f=0;f<1000;f++)frame();
+ assert(!flow_hint);
+ for(unsigned f=0;f<1800&&!flow_hint;f++)frame();
+ assert(flow_hint);
+ reset_test(1); link_on=1; link_started=1;link_mode=1;
+ for(unsigned f=0;f<12000;f++)frame();
+ assert(!flow_hint && !flow_force && !flow_count); // no race/fight interruption
+ link_mode=LINK_COOP;
+ for(unsigned f=0;f<12000;f++)frame();
+ assert(!flow_hint && !flow_force); // random local arrivals do not desync co-op
+ reset_test(1); flow_arg=1;flow_force=FLOW_FIGHT;dirty=1;
+ assert(!frame());
+ for(unsigned f=0;f<130 && !flow_count;f++)frame();
+ assert(flow_count==1); // authored progression still forces its announced encounter
+ return 0;
+}
+`,
+  );
+});
+
+await test("Boy and Girl are always available and rerolls, undo and confirmation keep the seeded genome", () => {
+  const player = readFileSync(join(root, "cartridge/src/crucible_player.c"), "utf8");
+  const counts = player.slice(
+    player.indexOf("static const uint8_t AV_COUNT"),
+    player.indexOf("/* never in the level order"),
+  );
+  const roll = player.slice(player.indexOf("static uint8_t pick_open"), player.indexOf("void player_defaults"));
+  runModule(
+    "crucible_avatar_edit.c",
+    String.raw`
+#include <stdint.h>
+#include <string.h>
+#include <assert.h>
+#define BANKED
+#include "crucible_avatar.h"
+#define AV_ROWS 9u
+#define AV_OPTIONS 81u
+#define PF_DMG 32u
+#define J_A 1u
+#define J_B 2u
+#define J_UP 4u
+#define J_DOWN 8u
+#define J_LEFT 16u
+#define J_RIGHT 32u
+#define J_START 64u
+#define J_SELECT 128u
+#define GLYPH(c) ((uint8_t)(c))
+#define UI_LEFT '<'
+#define UI_RIGHT '>'
+#define UI_A 'A'
+#define UI_B 'B'
+#define SFX_OPEN 1u
+#define SFX_CLOSE 2u
+#define SFX_UNDO 3u
+#define SFX_MOVE 4u
+#define SFX_DENY 5u
+#define SFX_SWAP 6u
+static uint8_t fr_scratch[32], menu_slot, VBK_REG, locked;
+static uint8_t tiles[32][32], face[6];
+static struct { uint8_t genome[6],flags; } pl;
+static void set_bkg_tiles(uint8_t x,uint8_t y,uint8_t w,uint8_t h,const uint8_t *p) {
+ assert(x+w<=32 && y+h<=32);
+ if(!VBK_REG)for(uint8_t j=0;j<h;j++)memcpy(tiles[y+j]+x,p+j*w,w);
+}
+void avatar_make_genome(const uint8_t *g) { memcpy(face,g,6); }
+void avatar_glitch(uint8_t) {}
+static void sound_play(uint8_t) {}
+static uint8_t player_unlocked(uint8_t o);
+` +
+      counts +
+      String.raw`
+static uint8_t player_unlocked(uint8_t o) {
+ if(locked)return 0;
+ for(unsigned i=0;i<sizeof START;i++)if(START[i]==o)return 1;
+ return 0;
+}
+` +
+      roll +
+      String.raw`
+static void player_story_load(uint8_t,uint16_t seed) {
+ player_genome_roll(pl.genome,seed); pl.genome[4]|=0x28; pl.genome[5]=0x83;
+}
+`,
+    String.raw`
+int main() {
+ for(uint16_t seed=1;seed<=128;seed++) {
+  uint8_t original[6],boy[6],girl[6],rerolled[6];
+  locked=0; av_edit_open(seed); memcpy(original,av_genome,6);
+  assert(row_==LOOK_ROW && !get_(LOOK_ROW) && !av_genome_set);
+  assert(!memcmp(tiles[1]+2,"LOOK",4) && !memcmp(tiles[1]+10,"DREAM",5));
+  assert(!memcmp(tiles[8]+2,"STYLE",5)); // existing cosmetic rows stay in place
+  locked=1; // no cosmetic option unlocked: the choice is still reachable
+  av_edit_tick(J_RIGHT); assert(get_(LOOK_ROW)==AV_LOOK_BOY && (av_genome[0]&15)==1);
+  assert(!memcmp(tiles[1]+10,"BOY",3)); memcpy(boy,av_genome,6);
+  av_edit_tick(J_RIGHT); assert(get_(LOOK_ROW)==AV_LOOK_GIRL && (av_genome[0]&15)==1);
+  assert(!memcmp(tiles[1]+10,"GIRL",4)); memcpy(girl,av_genome,6);
+  av_edit_tick(J_B); assert(!memcmp(boy,av_genome,6)); // includes the look bits
+  av_edit_tick(J_RIGHT); locked=0;
+  av_edit_tick(J_SELECT); assert(get_(LOOK_ROW)==AV_LOOK_GIRL && (av_genome[0]&15)==1);
+  assert(av_genome[5]==girl[5] && (av_genome[4]&0xf8)==(girl[4]&0xf8));
+  assert(!memcmp(face,av_genome,6)); memcpy(rerolled,av_genome,6);
+  av_edit_tick(J_B); assert(!memcmp(girl,av_genome,6));
+  av_edit_tick(J_DOWN); assert(row_==1); // the human style row is skipped
+  av_edit_tick(J_UP); assert(row_==LOOK_ROW);
+  av_edit_tick(J_RIGHT); assert(get_(LOOK_ROW)==AV_LOOK_DREAM);
+  av_edit_tick(J_DOWN); assert(row_==0); // DREAM permits the other seeded forms
+  av_edit_open(seed); av_edit_tick(J_RIGHT); av_edit_tick(J_RIGHT); av_edit_tick(J_SELECT);
+  assert(!memcmp(rerolled,av_genome,6)); // identical seed + input history reproduces the face
+  assert(av_edit_tick(J_A)==1 && av_genome_set);
+  av_edit_open(seed); assert(!memcmp(original,av_genome,6));
+  assert(av_edit_tick(J_B)==2 && !av_genome_set); // back without modifying the saved player
+ }
+ return 0;
+}
+`,
+  );
+});
+
+await test("seeded human looks render deterministically with distinct silhouettes using the cartridge renderer", () => {
+  const dir = mkdtempSync(join(tmpdir(), "crucible-avatar-"));
+  try {
+    const runner = join(dir, "test.c");
+    writeFileSync(
+      runner,
+      String.raw`
+#include <stdint.h>
+#include <string.h>
+#include <assert.h>
+#define BANKED
+#include "crucible_avatar.h"
+extern uint8_t work_[AVATAR_BYTES],style_,hair_;
+int main(void) {
+ for(unsigned seed=1;seed<=256;seed++) {
+  uint8_t g[6]={(uint8_t)((seed%9)|((seed%16)<<4)),(uint8_t)(seed%128),
+                (uint8_t)(seed*13),(uint8_t)(seed*7),(uint8_t)(seed%8),0};
+  uint8_t boy[AVATAR_BYTES],girl[AVATAR_BYTES]; uint16_t pal[4],again[4];
+  avatar_make_genome(g); // every legacy DREAM style also stays within the renderer bounds
+  g[5]=AV_LOOK_BOY<<3; avatar_make_genome(g);
+  assert(style_==1 && (hair_==1 || hair_==4));
+  memcpy(boy,work_,sizeof boy); avatar_palette(pal);
+  avatar_make_genome(g); avatar_palette(again);
+  assert(!memcmp(boy,work_,sizeof boy) && !memcmp(pal,again,sizeof pal));
+  g[5]=AV_LOOK_GIRL<<3; avatar_make_genome(g);
+  assert(style_==1 && (hair_==2 || hair_==3));
+  memcpy(girl,work_,sizeof girl); avatar_palette(again);
+  assert(memcmp(boy,girl,sizeof boy) && !memcmp(pal,again,sizeof pal));
+  avatar_make_genome(g); assert(!memcmp(girl,work_,sizeof girl));
+ }
+ return 0;
+}
+`,
+    );
+    const binary = join(dir, "test");
+    const compile = spawnSync(
+      "clang",
+      [
+        "-std=c11",
+        "-DAVATAR_HOST",
+        "-fsanitize=address,undefined",
+        "-fno-sanitize-recover=all",
+        "-g",
+        "-I" + join(root, "cartridge/include"),
+        runner,
+        join(root, "cartridge/src/crucible_avatar.c"),
+        join(root, "cartridge/src/crucible_avatar_base.c"),
+        "-o",
+        binary,
+      ],
+      { encoding: "utf8" },
+    );
+    assert.equal(compile.status, 0, compile.stderr);
+    const result = spawnSync(binary, [], { encoding: "utf8" });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

@@ -584,7 +584,7 @@ const uint8_t *avatar_tiles(void) { return work_; }
  * eyes...). The genome's bytes also seed what stays alive (blinks, smoke, sparks). */
 static const uint16_t SKIN6[6] = {0x2E7F, 0x223B, 0x19B7, 0x1135, 0x08CF, 0x3EDF};
 void avatar_make_genome(const uint8_t *g) BANKED {
-  uint8_t sz, m, e, gr;
+  uint8_t sz, m, e, gr, look = (uint8_t)((g[5] & AV_LOOK_MASK) >> 3);
   uint16_t mid = 0;
   rng_ = (uint16_t)(0x1d2bu ^ g[0] ^ ((uint16_t)g[1] << 8) ^ g[2] ^ ((uint16_t)g[3] << 5) ^ g[4]);
   if (!rng_) rng_ = 0x1d2bu;
@@ -594,6 +594,7 @@ void avatar_make_genome(const uint8_t *g) BANKED {
   warp_out_ = 0; /* a still face: no glitch left over from the last one */
   style_ = (uint8_t)(g[0] & 15u);
   if (style_ > 8u) style_ = 0;
+  if (look == AV_LOOK_BOY || look == AV_LOOK_GIRL) style_ = 1;
   hue_ = (uint8_t)(g[0] >> 4);
   head_ = (uint8_t)(g[1] & 7u);
   e = (uint8_t)((g[1] >> 3) & 15u);
@@ -629,6 +630,8 @@ void avatar_make_genome(const uint8_t *g) BANKED {
     mouth_ = (m & 1u) ? 5 : 0;
     gear_ = gr == 6u ? 6 : 0;
     if (gr < 5u) hair_ = gr;
+    if (look == AV_LOOK_BOY) hair_ = (gr & 1u) ? 4u : 1u;
+    if (look == AV_LOOK_GIRL) hair_ = (gr & 1u) ? 3u : 2u;
     hue_ = 0xffu;
     mid = SKIN6[(uint8_t)(g[0] >> 4) % 6u];
     break; /* a human's crown is its hair */

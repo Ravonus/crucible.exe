@@ -25,7 +25,10 @@ in any accurate CGB emulator and on hardware from a flash cart.
   stats and a leaderboard of your best runs.
 - **Story runs**, three save slots beside free play. Factions like or hate you for what you make and say. Talks and
   fights come to the bench: a face peeking in from above is a voice, eyes at the floor's edge are trouble. Chapters move
-  because of what happens there, and the truth of where you are shifts with it.
+  because of what happens there, and the truth of where you are shifts with it. Random Story visitors and bosses
+  also arrive while you play; you can approach or ignore them without needing a particular discovery.
+- **Your avatar** comes from a seed, with an always-available DREAM / BOY / GIRL look in the creator. Rerolling
+  keeps that choice while generating the rest of the face.
 - **Visitors** generated on the cartridge: a name, an archetype, a face built from primitives, and a conversation that
   remembers you.
 - **Living rooms** that change with your save, the place and the hour, and a sense of time without a clock chip. It

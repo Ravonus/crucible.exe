@@ -469,7 +469,7 @@ byte 1  head:3                | eyes:4 (0..9)        | wild:1 (lets the dream re
 byte 2  mouth:3               | gear:3               | neck:2
 byte 3  pattern:3             | dither:3             | size:2 (rx/ry presets 11/12, 13/14, 15/16)
 byte 4  fx:3                  | mark:3 (secret glyph layer) | glitch-in style:2
-byte 5  secret bits (8): halo-from-sparing, horns-from-taking, DMG-green, 3:33 sheet, ... (§8.4)
+byte 5  hair fallback:2 | DMG-green:1 | LOOK:2 (0 DREAM, 1 BOY, 2 GIRL) | reserved:3
 ```
 
 `avatar_make_genome(const uint8_t g[6])` sets the globals and then applies the per-style geometry from the existing
@@ -492,7 +492,14 @@ the left; 9 rows on the right — STYLE, HEAD, EYES, MOUTH, CROWN, MARK, HUE, GR
 | B            | undo the last change (one step); on an unchanged face, back to naming                                                     |
 | A or START   | done. The face glitches out and in (`avatar_glitch`); you never see the full menu again until the bench's SELECT → MIRROR |
 
-At the start, 30 of 81 options are open:
+LOOK sits above the portrait, in the former mood row, without moving the cosmetic controls. It is always available:
+DREAM keeps the seeded forms, while BOY and GIRL select a human look. The existing seed still chooses the face, colour,
+features and details within the unlocked options. SELECT keeps LOOK while rerolling the rest; B undoes the choice too.
+BOY uses a short or spiked haircut, GIRL uses long hair or a bun, selected from the generated crown variation. The six
+saved genome bytes retain the choice across resume and link rendering; old genomes with zero LOOK bits keep their
+original appearance. Human STYLE is fixed while BOY/GIRL is selected; DREAM restores the other forms.
+
+At the start, 30 of 81 cosmetic options are open:
 
 - style: human, robot, pixel
 - 4 heads, 4 eyes, 4 mouths

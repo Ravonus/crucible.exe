@@ -109,7 +109,7 @@ void fbui_top(void) BANKED {
   char n[4];
   fb_state *b = FB;
   text_(0, 0, " ", 20, T_CREAM);
-  text_(1, 0, who_, 7, T_BRASS);
+  text_(1, 0, who_, 8, T_BRASS);
   hp_bar(9, 0, (int8_t)b->hp, b->max);
   num_(n, b->hp, 2);
   text_(18, 0, n, 2, T_CREAM);

@@ -143,8 +143,11 @@ static void clear_box(void) {
 }
 static void standing(void) {
   uint8_t t = cru_story_tier(&saga_, (uint8_t)(who_ - 1u));
-  text_(1, 1, " ", 18, T_CREAM);
-  text_(1, 1, TIERS[t], (uint8_t)strlen(TIERS[t]), t >= CRU_TIER_FRIEND ? T_BRASS : T_CREAM);
+  char label[19];
+  strcpy(label, who_ && who_ < WHO_TYPES ? KIND[who_] : "");
+  if (label[0]) strcat(label, ": ");
+  strcat(label, TIERS[t]);
+  text_(1, 1, label, 18, t >= CRU_TIER_FRIEND ? T_BRASS : T_CREAM);
 }
 static void replies(void) {
   uint8_t i, x = 0;
@@ -734,6 +737,7 @@ uint8_t talk_tick(uint8_t pressed) BANKED {
     else if (pressed & (J_LEFT | J_RIGHT | J_SELECT | J_B))
       tear_ = 1;
     if (r == 1u) {
+      text_(0, 1, " ", 20, T_CREAM); /* the creator's LOOK belongs to that screen */
       avatar_make((uint16_t)(saga_.seed ^ 0x51u), CRU_FAC_AI);
       avatar_fx(7);
       avatar_glitch(1);
@@ -745,6 +749,7 @@ uint8_t talk_tick(uint8_t pressed) BANKED {
       text_(0, 17, " ", 20, T_CREAM);
       say_id(EV_SCALE_FIRST, 0);
     } else if (r == 2u) {
+      text_(0, 1, " ", 20, T_CREAM); /* the creator's LOOK belongs to that screen */
       avatar_make((uint16_t)(saga_.seed ^ 0x51u), CRU_FAC_AI);
       avatar_fx(7);
       avatar_glitch(1);

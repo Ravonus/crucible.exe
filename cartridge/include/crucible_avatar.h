@@ -2,6 +2,11 @@
 #define CRUCIBLE_AVATAR_H
 /* Procedural talking faces (crucible_avatar.c): 48x48, 36 sprite tiles, no art data. */
 #define AVATAR_BYTES 576u
+/* Genome byte 5 bits 3..4: optional human look, independent of cosmetic unlocks. */
+#define AV_LOOK_DREAM 0u
+#define AV_LOOK_BOY 1u
+#define AV_LOOK_GIRL 2u
+#define AV_LOOK_MASK 0x18u
 void avatar_make(uint16_t seed, uint8_t faction) BANKED; /* faction 0..5 (CRU_FAC_*) */
 void avatar_say(char c) BANKED; /* the letter being typed: shapes the mouth */
 uint8_t avatar_tick(uint8_t dt) BANKED; /* 1: the face changed (stream it) */

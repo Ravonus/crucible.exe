@@ -249,7 +249,7 @@ static void top_bar(void) {
   char n[4];
   const fr_side *p = &fr.s[1];
   text_(0, 0, " ", 20, T_CREAM);
-  text_(1, 0, who_, 7, T_BRASS);
+  text_(1, 0, who_, 8, T_BRASS);
   hp_bar(9, 0, p->hp, p->max);
   num_(n, p->hp > 0 ? (uint8_t)p->hp : 0u, 2);
   text_(18, 0, n, 2, T_CREAM);

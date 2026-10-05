@@ -204,13 +204,13 @@ static void tri(int16_t x0, int16_t y0, int16_t x1, int16_t y1, int16_t x2, int1
     x2 = t;
   }
   if (y2 == y0) return;
-  sa = (int16_t)(((x2 - x0) << 8) / (y2 - y0));
+  sa = (int16_t)(((x2 - x0) * 256) / (y2 - y0));
   ea = (int16_t)(x0 << 8);
-  sb = y1 > y0 ? (int16_t)(((x1 - x0) << 8) / (y1 - y0)) : 0;
+  sb = y1 > y0 ? (int16_t)(((x1 - x0) * 256) / (y1 - y0)) : 0;
   eb = (int16_t)(y1 > y0 ? x0 << 8 : x1 << 8);
   for (y = y0; y <= y2; y++) {
     if (y == y1) {
-      sb = y2 > y1 ? (int16_t)(((x2 - x1) << 8) / (y2 - y1)) : 0;
+      sb = y2 > y1 ? (int16_t)(((x2 - x1) * 256) / (y2 - y1)) : 0;
       eb = (int16_t)(x1 << 8);
     }
     xa = (int16_t)(ea >> 8);
