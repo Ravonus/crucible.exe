@@ -1,0 +1,7 @@
+build/
+node_modules/
+cartridge/data/
+catalogue/
+release/
+package-lock.json
+.venv/

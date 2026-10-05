@@ -1,0 +1,9 @@
+/build/
+/node_modules/
+__pycache__/
+.venv/
+*.sav
+*.state
+.DS_Store
+.mypy_cache/
+.ruff_cache/

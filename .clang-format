@@ -1,0 +1,27 @@
+# Hand-written C only (cartridge/src, cartridge/include, core); baked data under cartridge/data keeps its
+# generator's layout. SDCC inline assembly sits between "clang-format off/on" markers. Formatting never changes an
+# object file: npm run verify proves the ROM is byte-identical.
+---
+Language: Cpp
+BasedOnStyle: LLVM
+Standard: c++03
+ColumnLimit: 120
+IndentWidth: 2
+ContinuationIndentWidth: 4
+UseTab: Never
+BreakBeforeBraces: Attach
+PointerAlignment: Right
+SortIncludes: Never # include order carries meaning (#pragma bank, CORE_BANKED before crucible_core.h)
+IncludeBlocks: Preserve
+AllowShortFunctionsOnASingleLine: All
+AllowShortIfStatementsOnASingleLine: WithoutElse
+AllowShortLoopsOnASingleLine: true
+AllowShortBlocksOnASingleLine: Empty
+AllowShortCaseLabelsOnASingleLine: true
+AlignConsecutiveMacros: None
+AlignTrailingComments: false
+ReflowComments: false
+SpaceBeforeParens: ControlStatements
+IndentCaseLabels: false
+MaxEmptyLinesToKeep: 1
+...
