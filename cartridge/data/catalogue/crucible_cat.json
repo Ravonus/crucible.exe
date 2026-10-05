@@ -1,0 +1,299 @@
+{
+ "format": "crucible-cat@1",
+ "name": "world",
+ "items": 5629,
+ "recipes": 13439,
+ "categories": 7,
+ "starters": [
+  0,
+  1,
+  2,
+  3
+ ],
+ "chunkShift": 14,
+ "chunkBytes": 16384,
+ "blobBytes": 271248,
+ "chunks": [
+  {
+   "index": 0,
+   "file": "crucible_cat_0.c",
+   "symbol": "crucible_cat_0",
+   "offset": 0,
+   "bytes": 16384
+  },
+  {
+   "index": 1,
+   "file": "crucible_cat_1.c",
+   "symbol": "crucible_cat_1",
+   "offset": 16384,
+   "bytes": 16384
+  },
+  {
+   "index": 2,
+   "file": "crucible_cat_2.c",
+   "symbol": "crucible_cat_2",
+   "offset": 32768,
+   "bytes": 16384
+  },
+  {
+   "index": 3,
+   "file": "crucible_cat_3.c",
+   "symbol": "crucible_cat_3",
+   "offset": 49152,
+   "bytes": 16384
+  },
+  {
+   "index": 4,
+   "file": "crucible_cat_4.c",
+   "symbol": "crucible_cat_4",
+   "offset": 65536,
+   "bytes": 16384
+  },
+  {
+   "index": 5,
+   "file": "crucible_cat_5.c",
+   "symbol": "crucible_cat_5",
+   "offset": 81920,
+   "bytes": 16384
+  },
+  {
+   "index": 6,
+   "file": "crucible_cat_6.c",
+   "symbol": "crucible_cat_6",
+   "offset": 98304,
+   "bytes": 16384
+  },
+  {
+   "index": 7,
+   "file": "crucible_cat_7.c",
+   "symbol": "crucible_cat_7",
+   "offset": 114688,
+   "bytes": 16384
+  },
+  {
+   "index": 8,
+   "file": "crucible_cat_8.c",
+   "symbol": "crucible_cat_8",
+   "offset": 131072,
+   "bytes": 16384
+  },
+  {
+   "index": 9,
+   "file": "crucible_cat_9.c",
+   "symbol": "crucible_cat_9",
+   "offset": 147456,
+   "bytes": 16384
+  },
+  {
+   "index": 10,
+   "file": "crucible_cat_10.c",
+   "symbol": "crucible_cat_10",
+   "offset": 163840,
+   "bytes": 16384
+  },
+  {
+   "index": 11,
+   "file": "crucible_cat_11.c",
+   "symbol": "crucible_cat_11",
+   "offset": 180224,
+   "bytes": 16384
+  },
+  {
+   "index": 12,
+   "file": "crucible_cat_12.c",
+   "symbol": "crucible_cat_12",
+   "offset": 196608,
+   "bytes": 16384
+  },
+  {
+   "index": 13,
+   "file": "crucible_cat_13.c",
+   "symbol": "crucible_cat_13",
+   "offset": 212992,
+   "bytes": 16384
+  },
+  {
+   "index": 14,
+   "file": "crucible_cat_14.c",
+   "symbol": "crucible_cat_14",
+   "offset": 229376,
+   "bytes": 16384
+  },
+  {
+   "index": 15,
+   "file": "crucible_cat_15.c",
+   "symbol": "crucible_cat_15",
+   "offset": 245760,
+   "bytes": 16384
+  },
+  {
+   "index": 16,
+   "file": "crucible_cat_16.c",
+   "symbol": "crucible_cat_16",
+   "offset": 262144,
+   "bytes": 9104
+  }
+ ],
+ "tables": {
+  "category": {
+   "tab": 0,
+   "offset": 2,
+   "elem": 1,
+   "count": 5629
+  },
+  "traits": {
+   "tab": 1,
+   "offset": 5632,
+   "elem": 2,
+   "count": 5629
+  },
+  "starters": {
+   "tab": 2,
+   "offset": 16890,
+   "elem": 1,
+   "count": 704
+  },
+  "shelf": {
+   "tab": 3,
+   "offset": 17594,
+   "elem": 2,
+   "count": 5629
+  },
+  "shelf_pos": {
+   "tab": 4,
+   "offset": 28852,
+   "elem": 2,
+   "count": 5629
+  },
+  "recipe_a": {
+   "tab": 5,
+   "offset": 40110,
+   "elem": 2,
+   "count": 13439
+  },
+  "recipe_b": {
+   "tab": 6,
+   "offset": 66988,
+   "elem": 2,
+   "count": 13439
+  },
+  "recipe_r": {
+   "tab": 7,
+   "offset": 93866,
+   "elem": 2,
+   "count": 13439
+  },
+  "recipe_bit": {
+   "tab": 8,
+   "offset": 120744,
+   "elem": 2,
+   "count": 13439
+  },
+  "recipe_swap": {
+   "tab": 9,
+   "offset": 147622,
+   "elem": 1,
+   "count": 1680
+  },
+  "depth": {
+   "tab": 10,
+   "offset": 149302,
+   "elem": 1,
+   "count": 5629
+  },
+  "route_first": {
+   "tab": 11,
+   "offset": 154932,
+   "elem": 2,
+   "count": 5630
+  },
+  "route_list": {
+   "tab": 12,
+   "offset": 166192,
+   "elem": 2,
+   "count": 13439
+  },
+  "trait_shelf": {
+   "tab": 13,
+   "offset": 193070,
+   "elem": 1,
+   "count": 8448
+  },
+  "trait_rank": {
+   "tab": 14,
+   "offset": 201518,
+   "elem": 2,
+   "count": 1056
+  },
+  "names": {
+   "offset": 203630,
+   "elem": 12,
+   "count": 5629
+  },
+  "category_names": {
+   "offset": 271178,
+   "elem": 10,
+   "count": 7
+  }
+ },
+ "scalars": {
+  "mirrors": 181,
+  "catFirst": [
+   0,
+   226,
+   518,
+   830,
+   1093,
+   2713,
+   5044,
+   5629
+  ],
+  "totals": [
+   5629,
+   226,
+   292,
+   312,
+   263,
+   1620,
+   2331,
+   585,
+   388,
+   296,
+   664,
+   699,
+   436,
+   2224,
+   1228,
+   1721,
+   832,
+   2610,
+   773,
+   574
+  ],
+  "traitBytes": 704,
+  "traitBlocks": 88
+ },
+ "traits": [
+  "HOT",
+  "COLD",
+  "WET",
+  "AIRY",
+  "STONE",
+  "SHINY",
+  "GLOWS",
+  "ALIVE",
+  "GREEN",
+  "MADE",
+  "BIG",
+  "MAGIC"
+ ],
+ "categoryNames": [
+  "ELEMENT",
+  "MATTER",
+  "WEATHER",
+  "ENERGY",
+  "LIFE",
+  "CRAFT",
+  "PLACE"
+ ]
+}
