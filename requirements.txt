@@ -1,0 +1,7 @@
+# The headless harnesses (test/harness) and the SM83 core checks. Pinned: emulator timing and screenshots depend on
+# the exact PyBoy build.
+pyboy==2.7.0
+pillow==12.3.0
+numpy==2.5.3
+PySDL2==0.9.17
+pysdl2-dll==2.32.10
