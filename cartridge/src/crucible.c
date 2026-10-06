@@ -67,11 +67,11 @@ static const uint16_t CANDLE[4] = {0, (10u | (6u << 5) | (2u << 10)), (31u | (17
                                    (31u | (29u << 5) | (16u << 10))},
                       CLOUD[4] = {0, (25u | (19u << 5) | (30u << 10)), 0x7fffu, 0};
 typedef struct {
-  uint8_t kind, rotate, animate, bank, swap, drawn, x, y, shown, ready;
+  uint8_t kind, rotate, animate, bank, swap, drawn, x, y, shown, ready, have;
   uint16_t id, shade;
   uint8_t ticks;
   kr_frame_clock playback;
-} cell_t;
+} cell_t; /* have: turntable views already cached (it turns through those while the rest decode) */
 static cell_t cells[CELLS];
 /* the merge on screen (a copy of core.mix: the core clears its slots when the mix commits) */
 static uint16_t mix_a, mix_b, result, book_at, book_top, book_n;
@@ -273,6 +273,7 @@ static void cell_set(uint8_t c, uint8_t kind, uint16_t id, uint8_t rotate, uint8
   p->drawn = 0;
   p->swap = 0;
   p->ready = 0;
+  p->have = 0;
   kr_clock_reset(&p->playback);
   if (kind == K_ITEM) {
     p->ready = crucible_art_ready(id, rotate, 0) == 255u; /* a cached loop plays from the first frame */
@@ -325,12 +326,21 @@ static uint8_t cell_load(uint8_t c) {
   if (turn || p->animate) {
     if (!p->ready &&
         !(((uint8_t)sys_time + c) & 7u)) { /* real frames, not loop turns: the round robin can never lock it out */
-      uint8_t r = crucible_art_ready(p->id, turn, c == CF ? 120u : c < CL ? 100u : 80u);
-      if (r == 255u) p->ready = 1;
+      uint8_t r = crucible_art_ready(p->id, turn,
+                                     screen == REVEAL && c == CB ? 125u
+                                     : c == CF                   ? 120u
+                                     : c < CL                    ? 100u
+                                                                 : 80u);
+      if (r == 255u)
+        p->ready = 1;
+      else if (turn)
+        p->have = (uint8_t)(((uint16_t)r * (CRUCIBLE_VIEWS - 1u)) / 254u);
       if (c == CF) focus_load = r;
     }
+    /* a turntable not all cached yet turns through the views it has (the chain decodes in order), so a new object turns
+   * within a few frames instead of standing on its keyframe; a resting loop still waits for all of it */
     if (!p->ready)
-      index = 0;
+      index = turn && p->have ? (uint8_t)(rot_step % (p->have + 1u)) : 0u;
     else if (c == CF)
       focus_load = 255u;
   }
@@ -666,22 +676,16 @@ static void story_react(uint8_t r) {
 /* ---- FIGHT: a boss's face above, what it is combining in three cells, your answer below ---- */
 static uint8_t flash_t;
 static void bust_open(void);
+static uint8_t fight_face; /* the opponent's face shows (the intro and the end); in play the merge row is the fight */
 static void fight_go(uint8_t f, uint8_t level, uint8_t nemesis) {
   bust_hide();
   sky_mode(0);
   pal_lease_begin();
   screen = FIGHT;
   cells_reset();
+  cells_place(0);
   arrow(0);
   fight_open(f, level, nemesis);
-  cells[CA].x = 1;
-  cells[CA].y = 9;
-  cells[CB].x = 8;
-  cells[CB].y = 9;
-  cells[CR].x = 15;
-  cells[CR].y = 9;
-  cells[CF].x = 8;
-  cells[CF].y = 13;
   bust_id = AVATAR;
   bust_view = 0;
   bust_hold = 1;
@@ -692,6 +696,7 @@ static void fight_go(uint8_t f, uint8_t level, uint8_t nemesis) {
   glitch_start(14);
   music_mood(1);
   flash_t = 0;
+  fight_face = 1;
 } /* the champion song plays the fight (crucible_sound.c) */
 static void fight_end(uint8_t r) {
   pal_lease_end();
@@ -699,6 +704,7 @@ static void fight_end(uint8_t r) {
   bust_hide();
   bust_id = (uint8_t)(rnd8() % CRUCIBLE_BUSTS);
   fade(0, 0, 0, 0);
+  fight_face = 0;
   if (r == FIGHT_OVER) {
     talk_go(MENU, 2);
     talk_event(STORY_OVER, fight_lost());
@@ -709,19 +715,33 @@ static void fight_end(uint8_t r) {
 static void tick_fight(void) {
   uint8_t r = fight_tick(pressed, dt), fx, c;
   crucible_cells v;
+  if (r != FIGHT_GOING) {
+    fight_end(r);
+    return;
+  }
+  fx = fight_fx();
+  if (fx & FIGHT_FX_FACE) {
+    fight_face = 1;
+    bust_open();
+    bust_glitch = 12;
+    pal_sp(1, GLITCH);
+  }
+  if (fx & FIGHT_FX_NOFACE) {
+    fight_face = 0;
+    bust_hide();
+  }
   fight_view(&v);
   for (c = 0; c < CELLS; c++)
     if (v.kind[c] < 8u)
       cell_set(c, v.kind[c], v.id[c], (v.message >> c) & 1u, 1); /* the fight says what each cell shows */
-  fx = fight_fx();
-  if (fx & FIGHT_FX_FLASH) flash_t = 12u; /* the attack lands: white */
-  if (fx & (FIGHT_FX_SHAKE | FIGHT_FX_CHARGE)) {
+  if (fx & FIGHT_FX_FLASH) flash_t = 12u; /* you are hit: a white wash */
+  if (fight_face && (fx & (FIGHT_FX_SHAKE | FIGHT_FX_CHARGE))) {
     bust_glitch = fx & FIGHT_FX_SHAKE ? 12u : 6u;
     pal_sp(1, GLITCH);
   } /* jolt / charge */
-  if (fx & FIGHT_FX_TEAR) glitch_start(10);
+  if (fx & (FIGHT_FX_TEAR | FIGHT_FX_SHAKE)) glitch_start(fx & FIGHT_FX_SHAKE ? 16u : 10u); /* the merge row tears */
   if (fx & FIGHT_FX_PHASE) {
-    avatar_glitch(1);
+    if (fight_face) avatar_glitch(1);
     glitch_start(20);
   }
   if (flash_t) {
@@ -729,14 +749,12 @@ static void tick_fight(void) {
     fade((uint8_t)(flash_t + 4u > 16u ? 16u : flash_t + 4u), WHITE, (uint8_t)(flash_t), WHITE);
     if (!flash_t) fade(0, 0, 0, 0);
   }
-  /* the "?" shimmers while the attack charges */
   if (v.sign && !(clock & 7u)) {
     uint16_t p[4];
     fight_shimmer(p);
     pal_bg(3, p);
-  }
-  bust_tick();
-  if (r != FIGHT_GOING) fight_end(r);
+  } /* the ? while they think */
+  if (fight_face) bust_tick();
 }
 /* the link cable's news */
 static void bench_view(void);
@@ -910,42 +928,52 @@ static void motes(uint8_t on) {
       move_sprite(OAM_MOTE + i, 0, 0);
   }
 }
-static void draw_reveal(void) {
+static void draw_reveal(
+    uint8_t k) { /* the card, a part a frame once the scene's rows are in (tick_reveal): no part stalls the screen */
   char n[10], b[12];
   uint8_t len;
-  scene_draw(SCENE_REVEAL);
-  header(0);
-  cells_place(0);
-  cells_reset();
-  field(2, 10, 16, outcome == CRU_NEW ? "NEW DISCOVERY" : outcome == CRU_ROUTE ? "NEW RECIPE" : "KNOWN", T_BRASS);
-  crucible_get_name(result, label);
-  field(2, 11, 16, label, T_CREAM);
-  crucible_get_category(result, label);
-  field(2, 12, 16, label, T_BRASS);
-  cell_set(CB, K_ITEM, result, 1, 1);
-  crucible_get_name(mix_a, label);
-  crucible_get_name(mix_b, b);
-  len = strlen(label);
-  if (len + 3u + strlen(b) <= 16u) {
-    strcpy(label + len, " + ");
-    strcpy(label + len + 3u, b);
+  if (k == 2u) {
+    header(0);
+    cells_place(0);
+    cells_reset();
+    field(2, 10, 16, outcome == CRU_NEW ? "NEW DISCOVERY" : outcome == CRU_ROUTE ? "NEW RECIPE" : "KNOWN", T_BRASS);
+  } else if (k == 3u) {
+    crucible_get_name(result, label);
+    field(2, 11, 16, label, T_CREAM);
+  } else if (k == 4u) {
+    crucible_get_category(result, label);
+    field(2, 12, 16, label, T_BRASS);
+  } else if (k == 5u)
+    cell_set(CB, K_ITEM, result, 1, 1);
+  else if (k == 6u) {
+    crucible_get_name(mix_a, label);
+    crucible_get_name(mix_b, b);
+    len = strlen(label);
+    if (len + 3u + strlen(b) <= 16u) {
+      strcpy(label + len, " + ");
+      strcpy(label + len + 3u, b);
+    }
+    field(2, 13, 16, label, T_BRASS);
+  } else {
+    if (awarded) {
+      n[0] = '+';
+      number(n + 1, awarded, awarded >= 10u ? 2u : 1u);
+      strcat(n, " PTS");
+      field(2, 14, 16, n, T_CREAM);
+    } else
+      field(2, 14, 16, "", T_CREAM);
+    cues();
   }
-  field(2, 13, 16, label, T_BRASS);
-  if (awarded) {
-    n[0] = '+';
-    number(n + 1, awarded, awarded >= 10u ? 2u : 1u);
-    strcat(n, " PTS");
-    field(2, 14, 16, n, T_CREAM);
-  } else
-    field(2, 14, 16, "", T_CREAM);
-  cues();
 }
 /* the core commits the mix: ownership, tried bits, points, feats and the save (a known or empty pair lands on the bench) */
-static void finish_merge(void) { awarded = cru_mix_finish(&core); }
+static void finish_merge(void) {
+  awarded = cru_mix_finish_later(&core);
+} /* its save runs over the next frames (main loop) */
 /* Timeline in real frames (sys_time), so a slow render step skips poses instead of slowing the merge. */
 /* alternation: holds 6,4,3,2 plus 1..4 swaps of 4 frames each */
 #define ALT_FRAMES 28u
-static uint16_t prev_t;
+static uint16_t prev_t, reveal_t0;
+static uint8_t rv_build, save_on;
 static uint8_t crossed(uint16_t at) { return prev_t < at && t >= at; }
 static void tick_merge(void) {
   uint8_t step, k, round, swaps, used, show_new, j, A = appr;
@@ -965,7 +993,7 @@ static void tick_merge(void) {
     fade(11, DUSK, 0, 0);
   if (t <= A) {
     if (outcome == CRU_NEW || outcome == CRU_ROUTE) {
-      crucible_art_urgent = 1;
+      crucible_art_urgent = 0;
       crucible_art_tick();
     }
     place_pair((int16_t)ease(8, STAGE_X - 32u, (uint8_t)t, A), (int16_t)ease(64, STAGE_X, (uint8_t)t, A), 32);
@@ -1005,6 +1033,8 @@ static void tick_merge(void) {
       motes(0);
       return;
     }
+    crucible_art_urgent = 0;
+    crucible_art_tick(); /* the result's turntable decodes from the first frame of the fuse, a frame's worth at a time */
     if (((prev_t - A) >> 3) != ((t - A) >> 3)) {
       sound_play(SFX_BUBBLE);
       sound_drone(step);
@@ -1037,13 +1067,17 @@ static void tick_merge(void) {
   }
   if (t < end_alt) {
     /* Fused body and new form alternate as glowing silhouettes: holds shrink while bursts lengthen. */
-    crucible_art_urgent = 1;
-    crucible_art_tick();
-    (void)crucible_overlay_ahead(result);
+    crucible_art_urgent = 0;
+    if (t & 1u)
+      crucible_art_tick();
+    else
+      (void)crucible_overlay_ahead(
+          result); /* one or the other a frame (an urgent tick was 16 rows, 4..6 frames: the screen froze) */
     k = (uint8_t)(t - end_fuse);
     used = 0;
     show_new = 0;
     if (prev_t <= end_fuse) {
+      awarded = cru_mix_finish_later(&core);
       pal_sp(1, GLOW);
       pal_sp(2, GLOW);
       pal_sp(3, GLITCH);
@@ -1072,25 +1106,40 @@ static void tick_merge(void) {
       place_pair(STAGE_X - 16u, STAGE_X - 16u, STAGE_Y - 16u);
     return;
   }
-  /* the result turns out of the glitch until its turntable and overlay are decoded (crucible_reveal.c); then the flash */
-  if (!(k = reveal_turn())) return;
-  k--;
-  if (k > 8u) k = 8u;
-  fade(16, WHITE, (uint8_t)(k * 2u), WHITE);
-  if (!k) sound_play(SFX_FLASH);
-  if (k >= 8u) {
+  /* straight to the flash (four real frames) and the card: the result shows at once on its keyframe and turns through
+  * its views as they decode (the owner chose speed over waiting for the whole turntable; was: crucible_reveal.c's turn
+  * until resident, up to five seconds) */
+  crucible_art_urgent = 0;
+  crucible_art_tick();
+  k = (uint8_t)(t - end_alt > 4u ? 4u : t - end_alt);
+  fade((uint8_t)(12u + k), WHITE, (uint8_t)(k * 4u), WHITE); /* both ramp: no two flash frames alike */
+  if (core.mix.open) awarded = cru_mix_finish_later(&core); /* (a new recipe has no alternation: its commit is here) */
+  if (!k)
+    sound_play(SFX_FLASH);
+  else if (!rv_build) {
+    cells_reset();
+    scene_begin(SCENE_REVEAL);
+    rv_build = 1;
+  } /* the card's tiles go in under the white */
+  if (k >= 4u) {
     uint16_t p[12];
     fusion_hide();
-    finish_merge();
     crucible_ui_palettes(p);
     pal_sp(6, p + 4);
     screen = REVEAL;
     t = 0;
-    draw_reveal();
+    reveal_t0 = sys_time;
     glitch_start(12);
-  }
+    if (!rv_build) {
+      cells_reset();
+      scene_begin(SCENE_REVEAL);
+      rv_build = 1;
+    }
+  } /* the save runs under the card (cru_save_step); the scene builds two rows a frame */
 }
+#define REVEAL_FADE 10u /* real frames from the flash's white to the card (was 24 loop steps, about 50 frames) */
 static void back_to_bench(void) {
+  cru_save_flush(&core);
   egg_made(result);
   if (outcome == CRU_NEW) link_found(result);
   talk_notice(result);
@@ -1103,16 +1152,23 @@ static void back_to_bench(void) {
   story_react(story_after_mix(result, result, 1));
 }
 static void tick_reveal(void) {
-  uint16_t before = t;
-  t += dt > 2u ? 2u : dt;
-  if (t > 255u) t = 255u;
+  uint16_t before = t, e = (uint16_t)(sys_time - reveal_t0);
+  t = e > 255u ? 255u : e;
+  if (t <= before) t = before + 1u; /* real frames: a busy loop never slows the fade-in */
   if (before == 0u) {
     music_mood(0);
     sound_voice(result, crucible_category(result), outcome == CRU_NEW ? 2u : outcome == CRU_ROUTE ? 3u : 4u, 0);
   }
-  fade(t < 24u ? (uint8_t)(16u - (t * 16u / 24u)) : 0u, WHITE, t < 24u ? (uint8_t)(16u - (t * 16u / 24u)) : 0u, WHITE);
+  if (rv_build) {
+    if (rv_build > 1u || !scene_rows(2u)) {
+      draw_reveal(++rv_build);
+      if (rv_build >= 7u) rv_build = 0;
+    }
+  } /* two rows a frame (a row is half a frame of VRAM writes), then the card a part a frame */
+  fade(t < REVEAL_FADE ? (uint8_t)(16u - (t * 16u / REVEAL_FADE)) : 0u, WHITE,
+       t < REVEAL_FADE ? (uint8_t)(16u - (t * 16u / REVEAL_FADE)) : 0u, WHITE);
   burst(t <= BURST_FRAMES && outcome != CRU_KNOWN ? (uint8_t)(t - 1u) : BURST_FRAMES);
-  if (t > 20u && (pressed & (J_A | J_B))) {
+  if (t > 20u && !rv_build && (pressed & (J_A | J_B))) {
     sound_play(SFX_CLOSE);
     back_to_bench();
   }
@@ -1506,6 +1562,15 @@ void crucible_run(void) BANKED {
     /* the classic soft reset: A+B+START+SELECT together restarts the cartridge (the save is untouched) */
     if ((held & (J_A | J_B | J_START | J_SELECT)) == (J_A | J_B | J_START | J_SELECT)) reset();
     cru_tick(&core, dt);
+    if (screen <= REVEAL) {
+      if (cru_save_step(&core, 24u))
+        save_on = 1;
+      else if (save_on) {
+        save_on = 0;
+        if (screen == BENCH) bench_view();
+      }
+    } else
+      cru_save_flush(&core); /* a mix's save, a few bytes a frame (a whole record at once froze the screen ~9 frames) */
     if (link_on) {
       link_event(link_poll(dt));
       if (link_started && screen == BENCH && !(clock & 31u)) link_hud();
@@ -1596,8 +1661,8 @@ void crucible_run(void) BANKED {
       tick_filter();
     else if (records_tick(pressed))
       open_menu(0);
-    if (screen != MERGE)
-      crucible_art_tick(); /* the merge has the CPU to itself (its turn decodes the result: crucible_reveal.c) */
+    if (screen != MERGE && !rv_build) crucible_art_tick();
+    /* (the reveal's build has the frame: decoding resumes once the card is up) */ /* the merge has the CPU to itself (its turn decodes the result: crucible_reveal.c) */
     glitch_tick();
     {
       uint8_t h = feats_toast(screen == BENCH && sky == 1u);
@@ -1610,13 +1675,13 @@ void crucible_run(void) BANKED {
       bands_tick(dt);
     }
     cells_update(screen == MERGE ? 0u : 2u);
-    crucible_overlay_tick(screen, focus_load);
+    if (!rv_build) crucible_overlay_tick(screen, focus_load);
     {
       uint8_t c, u = 0;
       for (c = 0; c < CELLS; c++)
         if (cells[c].kind == K_ITEM && (cells[c].rotate || cells[c].animate) && !cells[c].ready) u = 1;
-      crucible_art_urgent = u;
-    }
+      crucible_art_urgent = screen == REVEAL ? 0u : u;
+    } /* (the reveal: a frame's worth of decoding per frame, never a stall; full-rate ticks there turned it later, not sooner) */
     /* Also restore an unexpected scene exit (e.g. a link-end event); normal
    * fight_end already restored it. The existing scene byte avoids a poll. */
     if (audio_scene == FIGHT && screen != FIGHT) pal_lease_end();

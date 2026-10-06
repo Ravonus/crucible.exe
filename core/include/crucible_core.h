@@ -345,6 +345,11 @@ typedef struct crucible_core {
    * it and cru_load reads it back (left alone when no record loads); NULL writes zeros, as before. cru_init clears it;
    * cru_load keeps it. */
   uint8_t *card;
+  /* a record being written over frames (cru_save_step; cru_save.c): the core keeps no state of its own */
+  struct {
+    uint8_t on, commit, phase, i, n, bi;
+    uint16_t base, pos, crc;
+  } job;
 } crucible_core;
 
 /* ---- lifecycle and save ----------------------------------------------------------------------------------- */
@@ -356,6 +361,10 @@ uint8_t cru_load(crucible_core *c, uint8_t entropy) CORE_BANKED;
 /* Writes the record (the leaderboard row of this run first). The core saves by itself after a mix, a filter
  * change, wearing a title and a tier reached at a minute; the host calls it after changing settings or the name. */
 void cru_save(crucible_core *c) CORE_BANKED;
+/* the save over frames: a host that must not stall steps it (a few bytes a frame) until it returns 0; any other save,
+ * mix or flush finishes it first */
+uint8_t cru_save_step(crucible_core *c, uint8_t budget) CORE_BANKED;
+void cru_save_flush(crucible_core *c) CORE_BANKED;
 void cru_stir(crucible_core *c, uint8_t entropy) CORE_BANKED; /* folds input/timer noise into the rng */
 void cru_set_name(crucible_core *c, const char *name) CORE_BANKED; /* up to 8 letters; blank becomes YOU */
 void cru_get_name(const crucible_core *c, char *out) CORE_BANKED; /* out[CRU_NAME+1] */
@@ -391,6 +400,9 @@ uint8_t cru_mix_begin(crucible_core *c, uint16_t a, uint16_t b, uint8_t entropy)
 /* Commits c->mix: play memory staged, points, feats, record written, journal applied. A KNOWN or NOTHING mix
  * started from the bench lands on it (slot A stays, the second pick takes focus, the sign's message). */
 uint8_t cru_mix_finish(crucible_core *c) CORE_BANKED;
+/* as cru_mix_finish, but its save is left running (cru_save_step) and the areas change when it is whole: the host shows
+ * the result at once and calls cru_save_flush before it reads the shelf again */
+uint8_t cru_mix_finish_later(crucible_core *c) CORE_BANKED;
 
 /* ---- recipe book ------------------------------------------------------------------------------------------ */
 uint16_t cru_book_rows(crucible_core *c, uint16_t *out,

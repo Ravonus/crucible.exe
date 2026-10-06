@@ -79,7 +79,8 @@ frame (`flow_tick`).
 Other hosts share the same director as portable C, `core/src/cru_encounter.c`, as it stood before the fight system.
 The cartridge does not link that file: its `crucible_flow.c` adds rules that read the player record and the fight
 tables, so the two differ. Only the cartridge: no fight
-until a DREAM element is owned (LIFE, PLANT or SNOW), the first fight is always the first duel, a duelist of a disliked
+until there is a bag to bring (twelve things on the shelf; THE CRUCIBLE, crucible-fight-system.md), the first fight is
+always the first duel, the first champion follows ten makes after it, a duelist of a disliked
 faction may walk in (1/16, +1/32 per hostile faction), chapter 4 and the finale send a gauntlet, a co-op session keeps
 its encounters, and a new chapter gives 50 XP. Forced talks roll `roll() % 5` (the core: `roll() < 52`), so seeded runs
 differ even where the rules agree. Bringing the cartridge onto the shared file means moving those rules into the core
@@ -122,18 +123,19 @@ the cost of Story fights, and the avatar's LOOK and reroll controls. These are e
 Rolls use a xorshift seeded from the bench's stirred rng (`core.rng`, moved by every press) and DIV; the story's own
 signals (`story_after_mix`) come from the run. Counts are in makes (mixes).
 
-| Trigger                                                                                                               | Mode                     | Comes as                                                                                                     | Rule                                                                                                                                  |
-| --------------------------------------------------------------------------------------------------------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
-| A miss destroyed an element / the run is lost / a lost piece's first glitch                                           | story, free (lost piece) | the machine, at once                                                                                         | unchanged: `STORY_LOSS` / `STORY_OVER` go straight to the machine's lines                                                             |
-| A visitor (`STORY_VISIT`: story from 3 makes since the last, rising with the chapter; free play from 6 makes, 1 in 4) | both                     | a talk: forced 1 in 5, else waiting above                                                                    | at least 2 makes after any encounter; a visit that cannot come yet (a breath, someone already waiting) is owed, not lost              |
-| A **hostile** faction (standing <= -50) sends its champion (`STORY_BOSS`, 1 in 4 makes)                               | story                    | a fight                                                                                                      | 6+ makes since the last fight: waits below; 12+: forced. Not due yet: a voice may come instead (5+ makes since the last talk, 1 in 3) |
-| A champion already waiting, and the faction is still hostile 12+ makes on                                             | story                    | the fight forces itself in                                                                                   | "loses patience"                                                                                                                      |
-| A **rival** (standing <= -15, wary or worse)                                                                          | story                    | a fight, waiting below                                                                                       | 8+ makes since the last fight, 1 in 4; certain right after a lost piece would not form ("it has it")                                  |
-| The **nemesis** that fled (met 1..2 times)                                                                            | story                    | a forced fight                                                                                               | 10+ makes since the last fight, 1 in 2                                                                                                |
-| **A new chapter** (the dialogue cadence advanced it during a talk)                                                    | story                    | chapter 1: a forced talk; chapter 2+: a forced fight with its gatekeeper (a rival, else the coldest faction) | two makes after the chapter turns                                                                                                     |
-| **Back after hours or more** (the power-on answer: `CT_AWAY_HOURS`, `_DAY`, `_WEEK`, within the 10 returning minutes) | both                     | a talk waiting above                                                                                         | once per power-on                                                                                                                     |
-| **A special minute** (1:11, 3:33, 4:04, 11:11, midnight...)                                                           | both                     | a talk waiting above                                                                                         | once per special minute                                                                                                               |
-| Ignored progression hint                                                                                              | story                    | (fades)                                                                                                      | a fighter: that faction's standing -3 (the grudge grows); a talker: the act `CRU_ACT_IDLE` (the dream leans to standing still)        |
+| Trigger                                                                                                               | Mode                     | Comes as                                                                                                                               | Rule                                                                                                                                  |
+| --------------------------------------------------------------------------------------------------------------------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| A miss destroyed an element / the run is lost / a lost piece's first glitch                                           | story, free (lost piece) | the machine, at once                                                                                                                   | unchanged: `STORY_LOSS` / `STORY_OVER` go straight to the machine's lines                                                             |
+| A visitor (`STORY_VISIT`: story from 3 makes since the last, rising with the chapter; free play from 6 makes, 1 in 4) | both                     | a talk: forced 1 in 5, else waiting above                                                                                              | at least 2 makes after any encounter; a visit that cannot come yet (a breath, someone already waiting) is owed, not lost              |
+| A **hostile** faction (standing <= -30; -50 until 2026-10-05) sends its champion (`STORY_BOSS`, 1 in 4 makes)         | story                    | a fight                                                                                                                                | 6+ makes since the last fight: waits below; 12+: forced. Not due yet: a voice may come instead (5+ makes since the last talk, 1 in 3) |
+| A champion already waiting, and the faction is still hostile 12+ makes on                                             | story                    | the fight forces itself in                                                                                                             | "loses patience"                                                                                                                      |
+| A **rival** (standing <= -8, wary or worse; -15 until 2026-10-05: honest play never got there)                        | story                    | a fight, waiting below                                                                                                                 | 8+ makes since the last fight, 1 in 4; certain right after a lost piece would not form ("it has it")                                  |
+| **The first champion** (the nemesis' first meeting), once the first duel is fought                                    | story                    | a forced fight                                                                                                                         | 10+ makes since the last fight                                                                                                        |
+| The **nemesis** that fled (met 1..2 times)                                                                            | story                    | a forced fight                                                                                                                         | 10+ makes since the last fight, 1 in 2                                                                                                |
+| **A new chapter** (the dialogue cadence advanced it during a talk)                                                    | story                    | chapter 1+: a forced fight with its gatekeeper (a rival, else the coldest faction); with no bag yet it is owed, not turned into a talk | two makes after the chapter turns                                                                                                     |
+| **Back after hours or more** (the power-on answer: `CT_AWAY_HOURS`, `_DAY`, `_WEEK`, within the 10 returning minutes) | both                     | a talk waiting above                                                                                                                   | once per power-on                                                                                                                     |
+| **A special minute** (1:11, 3:33, 4:04, 11:11, midnight...)                                                           | both                     | a talk waiting above                                                                                                                   | once per special minute                                                                                                               |
+| Ignored progression hint                                                                                              | story                    | (fades)                                                                                                                                | a fighter: that faction's standing -3 (the grudge grows); a talker: the act `CRU_ACT_IDLE` (the dream leans to standing still)        |
 
 Never: a fight in free play (fights cost elements; the Classic save is never at stake), any encounter in a race or a fight session (a co-op session keeps them: its bosses are shared), a
 hint over the room's door anomaly (UP is the door's while it shows), two encounters at once.
@@ -152,32 +154,48 @@ Chapters advance on the dialogue cadence (every third conversation, `dialogue_ca
 in play, so the story moves with what you make. Each chapter turn sends its gatekeeper two makes later (above). Rooms
 unlock at chapter 3 in a run (64 discoveries in free play).
 
-## Reveal: the result is already turning
+## Reveal: the card comes up at once (2026-10-05)
 
-Without a turn phase, a combination's result appears as a still keyframe on the reveal and starts turning only once
-its turntable has been decoded, with no material overlay on the reveal. `crucible_reveal.c` avoids that:
+The owner's complaint: after the merge the game sat on a frozen frame for seconds before the card ("what you made")
+appeared. It was not slow drawing: the main loop was blocked. Measured with a PyBoy timing probe ( 34
+fresh discoveries in a row, frames counted from the mix's confirm; a "still" is a frame identical to the one before):
 
-1. **At the merge's first frame** the result is known (`core.mix.result`): its turntable is queued for the art cache
-   (priority 125) and marked on screen so nothing evicts it, and the art decoder keeps running through the merge at
-   its idle rate instead of stopping for it.
-2. **The turn.** After the fuse (and a new discovery's fused/new alternation), which keep the CPU to themselves, the
-   result itself turns at the stage as sprites (OAM 0..15, OBJ tiles 32..47), resolving from a light
-   silhouette into its materials (the ordered FORM mask, by 40 frames) while two rows jog sideways. It cycles only
-   through views already decoded, so the turn widens as the turntable fills in (asking the decoder for a view behind
-   its position would restart its stream). Both decoders run at full rate: two urgent art ticks and two overlay steps a
-   frame, the base turntable and, ahead of time, its material overlay (`crucible_overlay_ahead`). The turn lasts at
-   least 24 real frames and until both are resident, capped at 300 real frames (5 s; it never hangs).
-3. **The flash**, then the reveal: its cell is marked ready the moment it is set (a cached loop plays from its first
-   frame), and the overlay runs on the reveal for that one cell (OAM 13..17; the burst keeps 0..11), turning with the
-   base frames.
+|                                                                         | before (ROM 098e9190) | after (ROM a13fa4a2) |
+| ----------------------------------------------------------------------- | --------------------- | -------------------- |
+| merge start to the card readable, median / worst                        | 363 / 490 frames      | 86 / 89              |
+| after the merge's animation (~68 frames): longest still, median / worst | 32 / 36 frames        | 4 / 9                |
+| frozen frames (stills of 4+) after the animation, median / worst        | 247 / 384             | 8 / 13               |
+| the object turning (overlay view advancing), median / worst             | 365 / 495             | 125 / 161            |
+| a known result back on the bench / longest still                        | 34 / 10               | 25 / 6               |
+| a failed mix back on the bench / longest still                          | 63 / 11               | 55 / 6               |
 
-Measured with `test/harness/capture_discoveries.py` (24 mixes): every reveal turns from the frame its cell is drawn (the view index
-advances 0, 1, 2... at the turn speed) with the overlay's sprites present by its third frame (steam has no material
-layer). The switch to the reveal also commits the save and draws the scene, about 14 frames under the white flash.
+Where the time went, and what replaced it:
+
+1. **The turn phase waited for the whole turntable and overlay** (`crucible_reveal.c` reveal_turn: up to 300 frames) and
+   decoded at the urgent rate, 16 rows a tick: one tick blocked the loop 4..6 frames. Now the merge goes straight from
+   the alternation to a four-frame flash, and every decode tick in the merge and on the card is the idle rate (one
+   frame's worth; the alternation does the art and the overlay on alternate frames).
+2. **The commit wrote the 512-byte save record in one go** (`cru_mix_finish`: about 9 frames of SRAM writes through the
+   store, plus 2..3 for the play memory and feats). The core now writes a record as a resumable job
+   (`cru_mix_finish_later`, `cru_save_step`, `cru_save_flush`, core): the commit runs at the start of the
+   alternation (inside its first hold), and the record goes out 24 bytes a frame under the merge, the card or the bench.
+   The play memory changes only once the record is whole (the journal order holds; a torn record still falls back to
+   the other slot), and a mix, a save, another screen or closing the card finishes it first. The bench redraws once it
+   lands (a failed pair's cross).
+3. **The card's scene was drawn in one go** (`scene_draw`: 18 rows, about 9 frames of VRAM writes with the screen on).
+   Scenes now draw in parts (`scene_begin`, `scene_rows`; living rooms `room_begin/row/end`): the tiles go in under the
+   flash, the rows two a frame, and a baked scene over the bench skips the rows and tiles it shares with it (rows 0..8
+   and 16, 28 tiles). Then the card's text and its object a part a frame. The fade from white runs on real frames (10).
+4. **The object shows at once on its keyframe and turns through the views already decoded** (a turntable cell cycles
+   the cached views while the rest decode; the owner chose speed over the old "never a still keyframe" rule). Its
+   turntable is queued from the first frame of the merge (and predicted while the second ingredient is chosen).
+
+`test/harness/capture_discoveries.py` now checks that the card's object turns within 300 frames with its overlay: 24 of 24, a median
+of 33 frames after its cell shows (13..64, one heavy object 120); the cell shows 21 frames after the switch.
 
 The merge uses elapsed VBlank time, shorter holds and exact lookup tables for the original fusion geometry. While
 choosing the second ingredient, the likely recipe result is prepared in the background; result jobs preempt lower
-priority art, and the approach and alternation also decode ahead. The reveal still waits for both turntables.
+priority art, and the approach and alternation also decode ahead. The reveal no longer waits for either turntable.
 In an isolated emulator comparison, FIRE + WATER reached its first discovery reveal in 154 frames instead of 376;
 repeating it reached the bench in 47 instead of 133. WATER + STEAM (no recipe) took 79 instead of 127. These are
 sample timings, including the input and screen transition, not a bound for every cold object.
@@ -390,7 +408,7 @@ resumed) with `test/harness/capture_flow.py`; screenshots are `OUTDIR/<phase>-<s
 | R17 | Story HUD   | `MISS 51%` shows from a run's first bench                                                                                                                                                                                                     | L   | `story-bench`                  | WON'T-FIX: pre-existing and true (the run's odds)                                                               |
 | R18 | Fights      | Answered blindly, a fight can take 4 of 9 elements; a weak run dies after 2-3 fights                                                                                                                                                          | M   | `story-story-fight*-after`     | WON'T-FIX here: this work keeps fight mechanics and outcomes; open question                                     |
 | R19 | Records     | SELECT closes the ledger (SELECT means filters elsewhere)                                                                                                                                                                                     | L   | `free-titles`                  | WON'T-FIX: harmless (no filter there); B is the documented back                                                 |
-| R20 | Tools       | `test/harness/capture_fight.py` opened FIGHT from the menu                                                                                                                                                                                    | L   |                                | FIXED: it raises the director's telegraph instead                                                               |
+| R20 | Tools       | The fight capture opened FIGHT from the menu                                                                                                                                                                                                  | L   |                                | FIXED: it raises the director's telegraph instead                                                               |
 | R21 | Link        | Link play was untested headlessly                                                                                                                                                                                                             | M   | `test/harness/capture_link.py` | FIXED: a two-instance bridge; 40 checks across co-op, race, draw, a pulled cable and two bouts                  |
 | R23 | Link        | A long merge on one side tore packets (the partner's queue dropped single bytes) and the link game ended LINK LOST                                                                                                                            | H   | `race-5-end` (before)          | FIXED: whole packets only; periodic packets wait for an idle line                                               |
 | R24 | Link        | The 3 s silence window was shorter than a busy scene's packet time (a fight opening on the guest)                                                                                                                                             | H   | `fight-t0-pick` (before)       | FIXED: 8 s during a link game                                                                                   |

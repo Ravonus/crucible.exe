@@ -49,7 +49,7 @@ void link_end(
 #define P_TURN 8u /* the first link fight's input (retired) */
 #define P_NAME 9u
 #define P_NAME2 10u
-#define P_FTURN 11u /* a: action | turn << 8; b: hash | (pip | ack << 7) << 8 */
+#define P_FTURN 11u /* a: word lo | (turn | round << 6) << 8; b: hash | word hi << 8 | 0x4000 an ack only */
 #define P_FSYNC 12u /* a: chunk | byte << 8; b: two bytes (chunk 0xff: the guest asks) */
 #define P_MADE 13u /* a: item; b: flags | serial << 8 */
 #define P_MISS 14u /* a: serial | streak << 8 */
@@ -58,12 +58,12 @@ void link_end(
 #define P_BEAT 17u /* a: beat | choice << 8; b: veto | active << 8 */
 #define P_CURSOR 18u /* a: beat | cursor << 8; b: nudge */
 #define P_CAT 19u /* a: items; b: recipes */
-#define P_DECK 20u /* a, b: id | slot << 13 */
+#define P_DECK 20u /* a, b: a bag's id | slot << 13 */
 #define P_LEAVE 21u
 #define P_RULES2 22u /* a: R4 | R5 << 8; b: R6 | R7 << 8 */
 #define P_AVATAR 23u /* genome 0..3 */
 #define P_AVATAR2 24u /* genome 4..5; level | attributes << 8 */
-#define P_PAS 25u /* a: passives (two nibbles) | (cell | got << 7) << 8; b: seed */
+#define P_PAS 25u /* a: bag size | (cell | got << 7) << 8; b: seed */
 #define P_SAVE 26u /* a: which save the partner brought (0 free, 1..3 a story slot) | chapter << 8 */
 #define P_SEED                                                                                                         \
   27u /* a: the run's seed (16 bits); b: order | heart << 8 (the alignment axes, signed): seeds grow together (9.4) */
@@ -77,23 +77,23 @@ void link_play_begin(void) BANKED;
 void link_play_tick(uint8_t dt) BANKED;
 uint8_t link_play_packet(uint8_t type, uint16_t a, uint16_t b) BANKED;
 uint8_t link_coop_packet(uint8_t type, uint16_t a, uint16_t b) BANKED;
-uint8_t link_fight_ready(void) BANKED;
+uint8_t link_fight_ready(void) BANKED; /* 0 not yet, 1 ready, 2 the other room is different */
 uint16_t link_fight_seed(void) BANKED;
-uint8_t link_fight_arena(void) BANKED;
-uint8_t link_fight_rules(void) BANKED;
-uint8_t link_fight_hp(uint8_t side) BANKED;
-uint8_t link_fight_focus(uint8_t side) BANKED;
-void link_kit_mine(uint16_t *kit, uint8_t *pas) BANKED;
-void link_kit_theirs(uint16_t *kit, uint8_t *pas) BANKED;
+uint8_t link_fight_first(uint8_t round) BANKED; /* who opens the round, in the host's side order */
+void link_bags(uint16_t *host, uint8_t *hn, uint16_t *guest, uint8_t *gn) BANKED;
+uint8_t link_fight_hp(uint8_t side) BANKED; /* side in the host's order */
 void link_partner_genome(uint8_t *g) BANKED;
 uint8_t link_partner_level(void) BANKED;
-void link_fturn(uint8_t act, uint8_t turn, uint8_t hash, uint8_t pip) BANKED;
-uint8_t link_fturn_in(uint8_t *act, uint8_t *turn, uint8_t *hash, uint8_t *pip) BANKED;
-uint8_t link_partner_locked(uint8_t turn) BANKED;
+void link_fturn(uint16_t w, uint8_t turn, uint8_t hash) BANKED; /* my move: re-sent until acked */
+uint8_t link_xturn_in(uint16_t *w, uint8_t turn, uint8_t *hash) BANKED; /* the partner's move for this turn */
+void link_round_reset(void) BANKED;
+uint8_t link_synced(void) BANKED; /* 1 once after the host's state was adopted */
 void link_fsync_ask(void) BANKED;
-uint8_t link_fight_over(uint8_t r) BANKED; /* a bout ended; 1: the match goes on (best of 3 or 5) */
+uint8_t link_fight_over(uint8_t r) BANKED; /* a round ended; 1: the match goes on (best of 3 or 5) */
+void link_rematch(uint8_t again) BANKED; /* the end screen: 1 AGAIN (asks), 0 LEAVE (the session ends) */
+uint8_t link_rematch_go(void) BANKED; /* 1 once both asked: a new match */
 uint8_t link_fight_pips(void) BANKED;
-extern uint8_t lp_wins[2], lp_bout;
+extern uint8_t lp_wins[2], lp_bout, lp_match, lp_again[2], lp_left;
 /* co-op and race (crucible_link_coop.c) */
 extern uint8_t link_save; /* the save brought to the session: 0 free play, 1..3 a story slot */
 void link_bring(void) BANKED; /* at GO: open the save brought (free play or the story slot) */

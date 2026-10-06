@@ -368,24 +368,21 @@ static void draw(void) {
 /* The link room's cable, row ROW0+5: your handheld, the cable, and theirs (their name once it crossed). Waiting, a
  * spark runs down a dashed cable to an empty slot; linked, the cable is solid and hums. */
 static void lobby_cable(void) {
-  char s[15], n[CRU_NAME + 1u];
-  uint8_t i, k = (uint8_t)((sys_time >> 3) & 3u);
-  strcpy(s, "[#]");
+  static const char *const DOTS[4] = {"   ", ".  ", ".. ", "..."};
+  char v[10], n[CRU_NAME + 1u];
+  uint8_t i;
+  /* the cable row, read as a setting: LINK and who is on the other end (?: the guest asks for other rules); dots while it searches */
   if (link_linked) {
-    for (i = 0; i < 3u; i++) s[3u + i] = (char)(((i + k) & 1u) ? '=' : '-');
     link_peer(n);
-    if (!n[0]) strcpy(n, link_role == LINK_HOST ? "GUEST" : "HOST");
-    s[6] = 0;
-    strcat(s, n);
-    if (link_ask && link_role == LINK_HOST) strcat(s, "?");
-  } /* ?: the guest asks for other rules */
-  else {
-    for (i = 0; i < 3u; i++) s[3u + i] = (char)(i == (k % 3u) ? '*' : '-');
-    s[6] = 0;
-    strcat(s, " [ ]");
-  }
-  text_(3, ROW0 + 5u, " ", 14, link_linked ? T_CREAM : T_BRASS);
-  text_(4, ROW0 + 5u, s, (uint8_t)strlen(s), link_linked ? T_CREAM : T_BRASS);
+    n[CRU_NAME] = 0;
+    for (i = CRU_NAME; i && (n[i - 1u] == ' ' || !n[i - 1u]); i--) n[i - 1u] = 0;
+    if (!n[0] || !strcmp(n, "YOU")) strcpy(n, link_role == LINK_HOST ? "GUEST" : "HOST");
+    strcpy(v, n);
+    if (link_ask && link_role == LINK_HOST) strcat(v, "?");
+  } else
+    strcpy(v, DOTS[(sys_time >> 4) & 3u]);
+  text_(3, ROW0 + 5u, " ", 14, T_CREAM);
+  setting(5, link_linked ? "LINK" : "SEARCHING", v);
 }
 /* the link moved (linked, rules): the lobby redraws */
 void menu_link_refresh(void) BANKED {

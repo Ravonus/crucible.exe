@@ -21,6 +21,9 @@ extern uint8_t room_dirty; /* crucible.c's pal_changed */
 extern uint16_t room_salt; /* folded into the save seed (0; a link partner or a test may set it) */
 /* scene_draw's hooks: compose and draw the bench (0) or reveal (1) room; give the palettes back to other screens */
 uint8_t room_draw(uint8_t kind) BANKED; /* 0: the home room (the baked scene draws) */
+uint8_t room_begin(uint8_t kind) BANKED; /* room_draw in parts: begin (0: the home room), a row, the end */
+void room_row(uint8_t y) BANKED;
+void room_end(uint8_t kind) BANKED;
 void room_leave(void) BANKED;
 uint8_t room_twinkle(uint8_t phase) BANKED; /* 1: the room handled the sky's twinkle */
 /* Every frame, before the screen's input is handled: returns pressed, minus the directions an anomaly holds. */

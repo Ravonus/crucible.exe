@@ -1,17 +1,20 @@
-/* FIGHT: every fight runs on one engine (crucible_fight_rules.c: the triangle read from the traits, kits, clashes,
- * passives, arenas) and comes to the bench from play (crucible_flow.c), never from a menu. This file is the screen and
- * the flow of a fight: the duel (a faction's figure, the duel AI), the link versus (the same rules in lockstep), and
- * the boss (crucible_fight_boss.c is its engine). crucible.c draws the four cells this reports (fight_view) and the
- * opponent's face as sprites, and plays the effects this raises (fight_fx); the player's own face is 36 BG tiles.
+/* FIGHT: THE CRUCIBLE (docs/fight-system.md). One pot between you and them; every move is a real recipe.
+ * Fights come to the bench from play (crucible_flow.c) or from the link's FIGHT mode, never from a menu. This file is
+ * the screen and the turn for every kind: a story duel (a faction's figure and its AI), a boss (its twist, its
+ * telegraph, its phases), a gauntlet (three figures, your HP carries) and the link versus (the same engine in
+ * lockstep: only action words travel). crucible_crux.c is the engine, crucible_fight_story.c who comes and what it
+ * gives and costs. crucible.c draws the six cells this reports (fight_view) on the bench's own room, the opponent's
+ * face as sprites in the intro and at the end, and the effects raised here (fight_fx).
  *
- * The duel screen (docs/fight-system.md 1.5, adapted to the cartridge's cells):
- *   row 0      the opponent's name, its HP bar, its HP
- *   row 1      the ticker
- *   rows 2-7   your face (BG, left) | its face (sprites) | its focus, passive patterns, lock mark and open hand (right)
- *   rows 9-12  a fuse's product (left cell) | your card VS its card (middle and right cells, when they flip)
- *   rows 13-16 your hand (left: glyph, power, name; the focused card turns in the cell) | your HP, focus, pips, patterns
- *   row 17     what the focused card is, and the buttons
- * Glyphs: HUM '=', WALL '#', DREAM '*' (the font's own; no new tiles). */
+ * The screen (20x18 tiles), the bench's layout:
+ *   row 0      your HP and bar | round pips | theirs
+ *   rows 1-2   the box: who they are, their bag and four; what the move in hand does (or what they just did)
+ *   rows 4-7   the merge row: [yours] + [the pot] = [what it makes]
+ *   row 8      the pot's tab: whose it is, its heat, its rule (locked / grows / the sky)
+ *   rows 10-13 your bag on the carousel (SELECT: theirs)
+ *   rows 15-17 the name and stars; the buttons; your four and the turn's pips
+ * Buttons: LEFT/RIGHT your things; A adds the one in hand (an empty pot: A marks it, A on a second forges the two,
+ * A on the same one sets it alone); B waits on their pot, pours yours, unmarks; SELECT looks at their bag. */
 #pragma bank 255
 #include <gb/gb.h>
 #include <string.h>
@@ -20,13 +23,9 @@
 #include "crucible_scene.h"
 #include "crucible_state.h"
 #include "crucible_lines.h"
-#include "crucible_truths.h"
-#include "crucible_lines.h"
 #include "crucible_avatar.h"
 #include "crucible_storyrun.h"
 #include "crucible_fight.h"
-#include "crucible_fight_rules.h"
-#include "crucible_fight_boss.h"
 #include "crucible_fight_int.h"
 #include "crucible_player.h"
 #include "crucible_link.h"
@@ -34,52 +33,75 @@
 #include "crucible_time.h"
 #define T_CREAM 7u
 #define T_BRASS 15u
-#define PIP_FRAMES 150u /* frames per pip: four pips, ten seconds a turn */
-#define SHOW_FRAMES 100u /* the outcome holds this long (A skips) */
-#define INTRO_FRAMES 60u /* the tear in; SELECT during it opens the kit */
-#define FLEE_FRAMES 60u /* B held this long flees a duel */
-uint8_t room_family(void) BANKED;
-uint16_t cri_shelf(crucible_core *c, uint16_t pos) BANKED;
-uint8_t cri_owned(crucible_core *c, uint16_t id) BANKED;
-uint8_t cri_depth(crucible_core *c, uint16_t id) BANKED;
-uint8_t kit_open(uint8_t where) BANKED; /* crucible_fight_kit.c */
-uint8_t kit_tick(uint8_t pressed) BANKED;
-uint8_t level_open(void) BANKED;
-uint8_t level_tick(uint8_t pressed) BANKED;
-
-/* ---- shared with the boss screen (crucible_fight_bossui.c; crucible_fight_int.h) ---- */
-uint8_t fui_fx, fui_faction, fui_flip, fui_partner, fui_intro_t, fui_end_line, fui_gained, fui_pips, fui_ready, fui_won,
-    fui_lost, fui_tlen, fui_tat, fui_tt;
-uint16_t fui_pip_t, fui_show_t, fui_xp;
-char fui_ticker[96], fui_who[12];
-crucible_boss *fui_b;
-/* ---- what a harness reads (the .noi) ---- */
-uint8_t fight_kind, fight_ui, fight_cursor, fight_me, fight_them, fight_dbg, fight_pips, fight_tutor, fight_glitch,
-    fight_end, fight_swap;
-uint8_t fight_fuse = 0xffu; /* the card marked for a fuse (0xff: none) */
+#define PIP_FRAMES 150u
+#define SHOW_FRAMES 90u
+#define THINK_MIN 40u
+#define INTRO_FRAMES 150u
+#define FLEE_FRAMES 60u
+uint8_t fight_kind, fight_ui, fight_cursor, fight_dbg, fight_swap, fight_round, fight_tier, fight_gauntlet, fight_look;
+static uint8_t fight_end;
+uint8_t fight_wins[2], flow_gauntlet;
 uint16_t fight_seed, fight_t0;
-uint8_t fight_room = 0xffu, fight_force_family = 0xffu, fight_force_part = 0xffu,
-        fight_force_special = 0xffu; /* the room the arena came from; test pokes (0xff: none) */
-uint8_t fight_gauntlet, flow_gauntlet;
-/* a gauntlet's duel (1..3); the director asks for one */ /* fight_t0: sys_time when the fight opened (its intro counts from there) */
-static const char *const FNAME[6] = {"PROGRAM", "DAEMON", "GHOST", "AI", "OPERATOR", "RELIC"};
-static const char STANCE_CH[4] = {'=', '#', '*', ' '};
-static const uint8_t BIT8[8] = {1, 2, 4, 8, 16, 32, 64, 128}; /* (field >> var) & 1 miscompiles on sdcc: masks */
-static const uint16_t BIT16[16] = {1u,   2u,   4u,    8u,    16u,   32u,   64u,    128u,
-                                   256u, 512u, 1024u, 2048u, 4096u, 8192u, 16384u, 32768u};
-/* passives as two letters (their pattern shows as pips) */
-static const char PCODE[FP_COUNT][3] = {"EC", "PR", "SC", "VI", "CA", "ST", "SA", "UN", "LU", "NO", "OV", "ME"};
-static const uint8_t PNEED[FP_COUNT] = {2, 3, 5, 2, 3, 3, 3, 2, 3, 2, 2, 3};
-/* the passive each faction teaches at FRIEND tier (section 4) */
-static const uint8_t TEACH[6] = {FP_MEMORY, FP_OVERCLOCK, FP_NOCLIP, FP_STALEMATE, FP_SALVE, FP_CATALYST};
-static const uint8_t LIKE_CAT[6] = {5u, 3u, 2u, 1u, 4u, 6u};
+char fui_line[20];
+uint8_t fui_line_attr, fui_fx;
+uint8_t fight_mark = 0xffu, fight_pips, fight_turns_seen; /* harness */
+uint16_t fight_word = CX_NONE; /* the last word played (harness) */
+static uint8_t intro_k_, chain_best_, open_t_, partner_, tl_[16], nt_, think_, eye_tool_, eye_kind_, prev_cur_,
+    prev_mark_, prev_look_, hold_b_, vs_got_;
+static uint16_t show_t_, pip_t_, pot_was_, owner_was_, vs_word_, dealt_;
+static uint8_t prev_phase_[2];
+static const uint8_t BIT8[8] = {1, 2, 4, 8, 16, 32, 64, 128};
+extern uint8_t win_pos_y; /* standalone/main.c: the toast window's position (144: off) */
 
-static uint8_t tear_t_, show_t_lo_, ai_lock_at_, ai_locked_;
-uint8_t fight_hold; /* frames B has been held (harness) */
-static uint8_t lucid_flag_, vs_got_, vs_sent_t_;
-static uint16_t cosm_ = 0x2b1du;
-
-static uint16_t lost_ = 0xffffu;
+/* ---- the fight's glyphs: twelve punctuation glyphs nobody types in a fight become icons; the font comes back at the
+ * end (crucible_load_font). Flat one-colour marks, no lighting. ---- */
+#define G_HEAT '$'
+#define G_LOCK '&'
+#define G_SKY '@'
+#define G_GROW '\\'
+#define G_EYE '^'
+#define G_BOLT '_'
+#define G_HPF '#'
+#define G_HPH '%'
+#define G_HPE '*'
+#define G_STAR '"'
+static const char ICON_CH[13] = {'<', ';', '>', '[', '$', '&', '@', '\\', '^', '_', '#', '%', '*'};
+static const uint8_t ICONS[13][8] = {{0x00, 0x18, 0x3c, 0x7e, 0xff, 0xdb, 0xff, 0x00}, /* < EARTH: a mound */
+                                     {0x10, 0x10, 0x38, 0x38, 0x7c, 0x6c, 0x38, 0x00}, /* ; WATER: a drop */
+                                     {0x10, 0x32, 0x3a, 0x7e, 0x6e, 0x46, 0x3c, 0x00}, /* > FIRE */
+                                     {0x00, 0x78, 0x84, 0x1a, 0x62, 0x9e, 0x00, 0x00}, /* [ AIR: a gust */
+                                     {0x20, 0x30, 0x74, 0x7c, 0xdc, 0x8c, 0x78, 0x00}, /* $ HEAT: a flame */
+                                     {0x38, 0x44, 0x44, 0xfe, 0xee, 0xee, 0xfe, 0x00}, /* & LOCK */
+                                     {0x00, 0x30, 0x7a, 0xfe, 0xfe, 0x00, 0x00, 0x00}, /* @ SKY: a cloud */
+                                     {0x0c, 0x12, 0x6c, 0x98, 0x68, 0x08, 0x1c, 0x00}, /* \ GROW: a sprout */
+                                     {0x00, 0x3c, 0x42, 0x99, 0x99, 0x42, 0x3c, 0x00}, /* ^ EYE */
+                                     {0x0c, 0x18, 0x3c, 0x78, 0x18, 0x30, 0x60, 0x00}, /* _ BOLT (the boss charges) */
+                                     {0x00, 0x7e, 0x7e, 0x7e, 0x7e, 0x7e, 0x7e, 0x00}, /* # HP: full */
+                                     {0x00, 0x7e, 0x72, 0x72, 0x72, 0x72, 0x7e, 0x00}, /* % HP: half */
+                                     {0x00, 0x7e, 0x42, 0x42, 0x42, 0x42, 0x7e, 0x00}}; /* * HP: empty */
+static const uint8_t STAR_[8] = {0x10, 0x10, 0xfe, 0x7c, 0x38, 0x6c, 0x44, 0x00};
+static void icon_load(char ch, const uint8_t *m) {
+  uint8_t t[16], i, tile = GLYPH(ch);
+  for (i = 0; i < 8u; i++) {
+    t[i + i] = m[i];
+    t[i + i + 1u] = m[i];
+  } /* colour 3: the font's ink */
+  VBK_REG = 0;
+  set_bkg_data(tile, 1, t);
+  for (i = 0; i < 8u; i++) {
+    t[i + i] = 0;
+    t[i + i + 1u] = m[i];
+  } /* the dim font's copy: colour 2 */
+  VBK_REG = 1;
+  set_bkg_data(tile, 1, t);
+  VBK_REG = 0;
+}
+static void icons_load(void) {
+  uint8_t i;
+  for (i = 0; i < 13u; i++) icon_load(ICON_CH[i], ICONS[i]);
+  icon_load('"', STAR_);
+}
+static const char ELEM_CH[4] = {'<', ';', '>', '['};
 
 static void put_(uint8_t x, uint8_t y, uint8_t tile, uint8_t attr) {
   VBK_REG = 1;
@@ -87,13 +109,14 @@ static void put_(uint8_t x, uint8_t y, uint8_t tile, uint8_t attr) {
   VBK_REG = 0;
   set_bkg_tiles(x, y, 1, 1, &tile);
 }
+/* local: a string literal belongs to this bank (ui_text in another bank would read the wrong bytes) */
 static void text_(uint8_t x, uint8_t y, const char *s, uint8_t width, uint8_t attr) {
   uint8_t tiles[20], attrs[20], i = 0, c;
   if (!width) return;
   if (width > 20u) width = 20u;
   memset(attrs, attr, width);
   while (i < width) {
-    c = *s;
+    c = (uint8_t)*s;
     if (c) s++;
     tiles[i++] = GLYPH(c);
   }
@@ -109,1192 +132,1310 @@ static void num_(char *o, uint16_t n, uint8_t w) {
     n /= 10u;
   }
 }
-static uint8_t cosm(void) {
-  cosm_ ^= (uint16_t)(cosm_ << 7);
-  cosm_ ^= (uint16_t)(cosm_ >> 9);
-  cosm_ ^= (uint16_t)(cosm_ << 8);
-  return (uint8_t)cosm_;
-} /* looks only: never fight state */
-static void clear_rows(uint8_t y0, uint8_t y1) {
-  for (; y0 <= y1; y0++) text_(0, y0, " ", 20, T_CREAM);
-}
+static void row_clear(uint8_t y) { text_(0, y, " ", 20, T_CREAM); }
+static void centre_(uint8_t y, char *s, uint8_t attr) {
+  uint8_t n = (uint8_t)strlen(s);
+  if (n > 20u) {
+    n = 20u;
+    s[20] = 0;
+  }
+  text_((uint8_t)((20u - n) / 2u), y, s, n, attr);
+} /* (never wider than the screen) */
+static uint8_t me_(void) { return 0; } /* this cartridge's player is side 0 (the guest's engine is swapped) */
 
-/* ---- the ticker (row 1): what it says, torn letters when the scene glitches ---- */
-static void say_text(const char *s) {
-  strncpy(ticker_, s, sizeof ticker_ - 1u);
-  ticker_[sizeof ticker_ - 1u] = 0;
-  ticker_len_ = (uint8_t)strlen(ticker_);
-  ticker_at_ = 0;
-  ticker_t_ = 0;
+/* ---- your things and theirs, in tool order (the bag, then the four) ---- */
+static uint8_t tools_of(uint8_t k, uint8_t *out) {
+  uint8_t i, n = 0;
+  for (i = 0; i < cx.s[k].n; i++) out[n++] = i;
+  for (i = 0; i < 4u; i++)
+    if (cx.s[k].four & BIT8[i]) out[n++] = (uint8_t)(12u + i);
+  return n;
 }
-static void say(uint8_t intent, uint16_t item) {
-  const char *slots[CRUCIBLE_TEXT_SLOTS];
-  char item_n[14];
-  uint8_t i, j;
-  if (item != CRU_NONE)
-    crucible_get_name(item, item_n);
-  else
-    strcpy(item_n, "SOMETHING");
-  memset(slots, 0, sizeof slots);
-  slots[0] = who_;
-  slots[1] = item_n;
-  ticker_len_ = crucible_text_line(
-      crucible_line_pick((uint8_t)(faction_ + 1u), intent, (uint16_t)((uint16_t)cosm() << 8 | cosm())), ticker_,
-      sizeof ticker_, slots);
-  for (i = 0, j = 0; i < ticker_len_; i++) {
-    char c = ticker_[i];
-    if ((uint8_t)c >= ' ') ticker_[j++] = c;
-  }
-  ticker_[j] = 0;
-  ticker_len_ = j;
-  ticker_at_ = 0;
-  ticker_t_ = 0;
+static void tools_now(void) {
+  nt_ = tools_of(fight_look ? 1u : 0u, tl_);
+  if (fight_cursor >= nt_) fight_cursor = nt_ ? (uint8_t)(nt_ - 1u) : 0u;
 }
-static void ticker(uint8_t dt) {
-  char row[19];
-  uint8_t i, k;
-  ticker_t_ = (uint8_t)(ticker_t_ + dt);
-  if (ticker_t_ < 5u) return;
-  ticker_t_ = 0;
-  for (i = 0; i < 18u; i++) {
-    k = (uint8_t)(ticker_at_ + i);
-    row[i] = k < 18u ? ' ' : (uint8_t)(k - 18u) < ticker_len_ ? ticker_[k - 18u] : ' ';
-  }
-  row[18] = 0;
-  if (tear_t_) {
-    tear_t_ = tear_t_ > 5u ? (uint8_t)(tear_t_ - 5u) : 0u;
-    for (i = 0; i < 18u; i += 5u) row[(uint8_t)(i + (cosm() & 3u))] = (char)('!' + (cosm() & 15u));
-  }
-  text_(1, 1, row, 18, T_CREAM);
-  if (++ticker_at_ > (uint8_t)(ticker_len_ + 18u)) ticker_at_ = 0;
-}
-static void status(const char *s, uint8_t attr) {
-  text_(0, 17, " ", 20, T_CREAM);
-  text_(1, 17, s, (uint8_t)strlen(s), attr);
-}
+static uint16_t hand_id(void) { return nt_ ? cx_tool(fight_look ? 1u : 0u, tl_[fight_cursor]) : CX_NONE; }
+static uint8_t knows_(uint16_t a, uint16_t b) { return cru_tried(&core, a, b); }
 
-/* ---- the duel's panels ---- */
-static void hp_bar(uint8_t x, uint8_t y, int8_t hp, uint8_t max) {
-  uint8_t i, n = 0, t = 0, h8;
+/* ---- the header (row 0): HP, bars, round pips ---- */
+static void bar(uint8_t x, int8_t hp, uint8_t max, uint8_t attr, uint8_t rtl) {
+  uint8_t i, h, units, full;
   if (hp < 0) hp = 0;
-  h8 = (uint8_t)((uint8_t)hp << 3); /* cells lit: i with hp*8 > i*max, by repeated addition */
-  for (i = 0; i < 8u; i++) {
-    if (h8 > t) n++;
-    t = (uint8_t)(t + max);
-  }
-  for (i = 0; i < 8u; i++) put_((uint8_t)(x + i), y, GLYPH(i < n ? '#' : '.'), i < n ? T_CREAM : T_BRASS);
-}
-static void pips_draw(uint8_t x, uint8_t y, uint8_t n, uint8_t max) {
-  uint8_t i;
-  for (i = 0; i < max; i++) put_((uint8_t)(x + i), y, GLYPH(i < n ? '!' : ' '), n <= 1u ? T_CREAM : T_BRASS);
-}
-/* focus as F n/max (four tiles) */
-static void focus_draw(uint8_t x, uint8_t y, uint8_t f) {
-  char s[5];
-  s[0] = 'F';
-  s[1] = (char)('0' + f);
-  s[2] = '/';
-  s[3] = (char)('0' + 3u + ((fr.rules & FR_R_NIGHT) ? 1u : 0u));
-  s[4] = 0;
-  text_(x, y, s, 4, f ? T_CREAM : T_BRASS);
-}
-/* a passive: two letters, then its public pattern as pips (unlocked: all lit) */
-static void passive_draw(uint8_t x, uint8_t y, const fr_side *p, uint8_t k) {
-  uint8_t id = p->pas[k], need, g, on;
-  char s[5];
-  if (id >= FP_COUNT) {
-    text_(x, y, "    ", 4, T_BRASS);
-    return;
-  }
-  on = (p->on & BIT8[k]) ? 1u : 0u;
-  need = PNEED[id];
-  g = on ? need : p->prog[k];
-  if (g > need) g = need;
-  s[0] = PCODE[id][0];
-  s[1] = PCODE[id][1];
-  s[2] = (char)((uint8_t)(g + g) >= need ? '#' : g ? ':' : '.'); /* half the pattern, then all of it */
-  s[3] = (char)(g >= need ? '#' : '.');
-  s[4] = 0;
-  text_(x, y, s, 4, on ? T_CREAM : T_BRASS);
-}
-static uint8_t fog(void) { return (fr.rules & FR_R_FOG) || (fr.arena == FA_FLICKER && fr.turn && !(fr.turn % 3u)); }
-static void card_glyphs(char *s, uint8_t mask, uint8_t pw) {
-  uint8_t st, n = 0;
-  for (st = 0; st < 3u; st++)
-    if (mask & BIT8[st]) s[n++] = STANCE_CH[st];
-  if (n < 2u) s[n++] = ' ';
-  s[2] = (char)('0' + pw);
-  s[3] = 0;
-}
-static void opp_block(void) {
-  const fr_side *p = &fr.s[1];
-  uint8_t i;
-  char s[4];
-  focus_draw(14, 2, p->focus);
-  passive_draw(14, 3, p, 0);
-  passive_draw(14, 4, p, 1);
-  text_(14, 5, ai_locked_ && fight_ui == UI_CHOOSE ? "LOCK" : "    ", 4, T_CREAM);
-  for (i = 0; i < 4u; i++) {
-    if (i < p->nhand) {
-      if (fog())
-        strcpy(s, "?? ");
-      else
-        card_glyphs(s, p->kst[p->hand[i]], p->kpw[p->hand[i]]);
-    } else
-      strcpy(s, "   ");
-    text_((uint8_t)(12u + (i & 1u) * 4u), (uint8_t)(6u + (i >> 1)), s, 3, T_CREAM);
+  /* ten half-steps over five tiles: units = round(hp * 10 / max) */
+  units = (uint8_t)(((uint16_t)(uint8_t)hp * 10u + max / 2u) / max);
+  if (hp && !units) units = 1;
+  for (i = 0; i < 5u; i++) {
+    h = rtl ? (uint8_t)(4u - i) : i;
+    full = (uint8_t)(h * 2u);
+    put_((uint8_t)(x + i), 0, GLYPH(units >= full + 2u ? G_HPF : units == full + 1u ? G_HPH : G_HPE), attr);
   }
 }
-static void top_bar(void) {
-  char n[4];
-  const fr_side *p = &fr.s[1];
-  text_(0, 0, " ", 20, T_CREAM);
-  text_(1, 0, who_, 8, T_BRASS);
-  hp_bar(9, 0, p->hp, p->max);
-  num_(n, p->hp > 0 ? (uint8_t)p->hp : 0u, 2);
+static void header(void) {
+  char n[3];
+  int8_t a = cx.s[0].hp, b = cx.s[1].hp;
+  uint8_t need = 0;
+  num_(n, a > 0 ? (uint8_t)a : 0u, 2);
+  text_(0, 0, n, 2, T_BRASS);
+  bar(2, a, cx.s[0].max, T_BRASS, 0);
+  text_(7, 0, "      ", 6, T_CREAM);
+  if (fight_kind == FK_VERSUS) {
+    need = link_rule(1);
+    need = (uint8_t)(((need >> 4) & 3u) == 2u ? 3u : ((need >> 4) & 3u) == 0u ? 1u : 2u);
+  }
+  if (need > 1u) {
+    uint8_t i;
+    for (i = 0; i < need && i < 3u; i++) {
+      put_((uint8_t)(7u + i), 0, i < fight_wins[0] ? UI_PIP_ON : UI_PIP_OFF, T_BRASS);
+      put_((uint8_t)(12u - i), 0, i < fight_wins[1] ? UI_PIP_ON : UI_PIP_OFF, T_CREAM);
+    }
+  }
+  bar(13, b, cx.s[1].max, T_CREAM, 1);
+  num_(n, b > 0 ? (uint8_t)b : 0u, 2);
   text_(18, 0, n, 2, T_CREAM);
 }
-static void me_block(void) {
-  const fr_side *p = &fr.s[0];
-  char n[10];
-  strcpy(n, "HP ");
-  num_(n + 3, p->hp > 0 ? (uint8_t)p->hp : 0u, 2);
-  n[5] = '/';
-  num_(n + 6, p->max, 2);
-  text_(12, 13, n, 8, T_CREAM);
-  hp_bar(12, 14, p->hp, p->max);
-  focus_draw(12, 15, p->focus);
-  pips_draw(16, 15, pips_, 4);
-  passive_draw(12, 16, p, 0);
-  passive_draw(16, 16, p, 1);
+/* ---- the box (rows 1-2) ---- */
+static void four_draw(uint8_t x, uint8_t y, uint8_t four, uint8_t attr) {
+  uint8_t e;
+  for (e = 0; e < 4u; e++) put_((uint8_t)(x + e), y, GLYPH(four & BIT8[e] ? ELEM_CH[e] : ' '), attr);
 }
-/* the stance a hand card plays now: its first stance, or the other one of a dual once flipped (UP) */
-static uint8_t live_stance(uint8_t i) {
-  uint8_t m = fr.s[0].kst[fr.s[0].hand[i]], st;
-  for (st = 0; st < 3u; st++)
-    if (m & BIT8[st]) break;
-  if (flip_ & BIT8[i])
-    for (st = (uint8_t)(st + 1u); st < 3u; st++)
-      if (m & BIT8[st]) break;
-  return st < 3u ? st : 0u;
-}
-static void hand_draw(void) {
-  const fr_side *p = &fr.s[0];
-  uint8_t i, s, m, st, pw;
-  char row[9], nm[14];
-  for (i = 0; i < 4u; i++) {
-    memset(row, ' ', 8);
-    row[8] = 0;
-    if (i < p->nhand) {
-      s = p->hand[i];
-      m = p->kst[s];
-      st = live_stance(i);
-      pw = p->kpw[s];
-      if (m == 3u || m == 5u || m == 6u) pw = pw > 1u ? (uint8_t)(pw - 1u) : 1u;
-      row[0] = (char)(i == fight_cursor ? '>' : (fuse_ == i ? '+' : ' '));
-      row[1] = STANCE_CH[st];
-      {
-        uint8_t o = (uint8_t)(m & (uint8_t)~BIT8[st]);
-        row[2] = (m == 3u || m == 5u || m == 6u) ? STANCE_CH[o == 1u ? 0u : o == 2u ? 1u : 2u] : ' ';
-      }
-      row[3] = (char)('0' + pw);
-      crucible_get_name(p->kit[s], nm);
-      memcpy(row + 4, nm, 4);
-    }
-    text_(0, (uint8_t)(13u + i), row, 8, i == fight_cursor ? T_CREAM : T_BRASS);
-  }
-}
-/* what A does now (row 17): the focused card, or the fuse */
-static uint8_t fuse_act(void) {
-  uint8_t a = fuse_ < partner_ ? fuse_ : partner_, b = fuse_ < partner_ ? partner_ : fuse_, x, st;
-  fr_cardv c;
-  for (st = 0; st < 3u; st++) {
-    x = FR_ACT(FR_FUSE, a, b, st);
-    if (fr_legal(0, x)) {
-      (void)fr_card(0, x, &c);
-      return x;
-    }
-  }
-  return 0xffu;
-}
-static uint16_t fuse_product(void) {
-  uint8_t x = fuse_act();
-  fr_cardv c;
-  if (x == 0xffu) return CRU_NONE;
-  (void)fr_card(0, x, &c);
-  return c.id;
-}
-static void answer_line(void) {
-  char n[14];
-  uint16_t id;
-  const fr_side *p = &fr.s[0];
-  text_(0, 17, " ", 20, T_CREAM);
-  if (fight_ui == UI_WAIT) {
-    text_(1, 17, "LOCKED. WAITING", 15, T_BRASS);
+static void box_top(void) {
+  char s[8];
+  row_clear(1);
+  if (eye_tool_ != 0xffu && fight_ui == UI_CHOOSE &&
+      !fight_look) { /* the eye: what of theirs could take what you would leave */
+    char t[24], nm[14];
+    crucible_get_name(cx_tool(1, eye_tool_), nm);
+    t[0] = G_EYE;
+    t[1] = ' ';
+    strcpy(t + 2, eye_kind_ == 3u ? "TAKES:" : eye_kind_ == 2u ? "SPLITS:" : "BREAKS:");
+    if (strlen(t) + strlen(nm) < 19u)
+      strcat(t, " ");
+    else if (strlen(t) + strlen(nm) > 19u)
+      t[2] = 0;
+    strcat(t, nm); /* (a long name: no space; longer still: the eye and the name) */
+    text_(1, 1, t, (uint8_t)strlen(t) > 19u ? 19u : (uint8_t)strlen(t), T_CREAM);
     return;
   }
-  if (fight_ui != UI_CHOOSE) return;
-  if (fuse_ != 0xffu) {
-    id = fuse_product();
-    if (id == CRU_NONE) {
-      text_(1, 17, partner_ == fuse_ ? "PICK ITS PAIR" : "NOTHING", 13, T_BRASS);
+  text_(1, 1, fo_name, (uint8_t)strlen(fo_name) > 9u ? 9u : (uint8_t)strlen(fo_name), T_CREAM);
+  strcpy(s, "BAG ");
+  num_(s + 4, cx.s[1].n, cx.s[1].n >= 10u ? 2u : 1u);
+  if (fight_ui == UI_INTRO && (fight_kind == FK_VERSUS ? !cx.s[1].n : !fs_ready))
+    strcpy(s, "     "); /* (its bag not packed yet: no count) */
+  if ((link_rule(3) & 32u) && fight_kind == FK_VERSUS) strcpy(s, "BAG ?"); /* FOG: their bag is hidden */
+  text_(10, 1, s, 5, T_BRASS);
+  four_draw(16, 1, cx.s[1].four, T_CREAM);
+}
+static void box_line(void) {
+  row_clear(2);
+  text_(1, 2, fui_line, (uint8_t)strlen(fui_line), fui_line_attr);
+}
+static void line(const char *s, uint8_t attr) {
+  strncpy(fui_line, s, 19);
+  fui_line[19] = 0;
+  fui_line_attr = attr;
+  box_line();
+}
+/* ---- the pot's tab (row 8) ---- */
+static void tab(void) {
+  char s[17];
+  uint8_t i, n = 0, k = cx.owner, c;
+  if (cx.pot != CX_NONE) {
+    const char *who = k == me_() ? "YOU" : fo_name;
+    for (i = 0; i < 8u && who[i]; i++) s[n++] = who[i];
+    s[n++] = ' ';
+    c = cx_cat(cx.pot);
+    if (c == CX_C_PLACE)
+      s[n++] = G_LOCK;
+    else {
+      for (i = 0; i < cx.heat; i++) s[n++] = G_HEAT;
+      if (!cx.heat) s[n++] = '-';
+    }
+    if (c == CX_C_LIFE) s[n++] = G_GROW;
+    if (cx.sky && (cx_traits(cx.pot) & cx.sky)) s[n++] = G_SKY;
+    if ((cx.s[k].tw & CX_TW_LOCK) && cx_phase(k) >= 2u && k != me_()) s[n++] = G_LOCK;
+    if (cx.s[k].tw & CX_TW_CHARGE) s[n++] = G_BOLT;
+  } else if (fight_kind == FK_BOSS && fo_plan != CX_NONE && (fight_ui == UI_WAIT || fight_ui == UI_INTRO)) {
+    strcpy(s, "NEXT IT FORGES");
+    n = 14;
+  } else if (fight_ui == UI_INTRO && fight_look) {
+    strcpy(s, "THEIR BAG");
+    n = 9;
+  }
+  text_(2, 8, " ", 16, T_CREAM);
+  if (n) text_((uint8_t)(2u + (16u - n) / 2u), 8, s, n, k == me_() && cx.pot != CX_NONE ? T_BRASS : T_CREAM);
+}
+/* ---- the name row, the buttons, your four and the turn ---- */
+static void name_row(void) {
+  char nm[14], s[20];
+  uint16_t id = hand_id();
+  uint8_t n, st, i;
+  row_clear(15);
+  if (id == CX_NONE) return;
+  crucible_get_name(id, nm);
+  n = (uint8_t)strlen(nm);
+  st = cx_stars(id);
+  memcpy(s, nm, n);
+  s[n++] = ' ';
+  for (i = 0; i < st; i++) s[n++] = G_STAR;
+  s[n] = 0;
+  text_((uint8_t)((20u - n) / 2u), 15, s, n, fight_look ? T_CREAM : T_BRASS);
+}
+static void hints(void) {
+  uint8_t mine = fight_ui == UI_CHOOSE && !fight_look;
+  row_clear(16);
+  if (fight_look) {
+    put_(0, 16, UI_B, T_CREAM);
+    text_(1, 16, "BACK", 4, T_CREAM);
+    text_(7, 16, "THEIR BAG", 9, T_BRASS);
+    return;
+  }
+  if (!mine) {
+    text_(1, 16, fight_ui == UI_WAIT ? "THEIR TURN" : " ", 10, T_BRASS);
+    text_(13, 16, "SE", 2, T_BRASS);
+    text_(16, 16, "BAG", 3, T_BRASS);
+    return;
+  }
+  put_(0, 16, UI_A, T_CREAM);
+  if (cx.pot == CX_NONE) {
+    text_(1, 16, fight_mark != 0xffu ? "FORGE" : "MARK", 5, T_CREAM);
+    if (fight_mark != 0xffu) {
+      put_(7, 16, UI_B, T_CREAM);
+      text_(8, 16, "UNDO", 4, T_CREAM);
+    }
+  } else if (cx.owner == me_()) {
+    text_(1, 16, cx_locked_to(0) ? "-" : "BUILD", 5, T_CREAM);
+    put_(7, 16, UI_B, T_CREAM);
+    text_(8, 16, "POUR", 4, T_CREAM);
+  } else {
+    text_(1, 16, "ADD", 3, T_CREAM);
+    put_(7, 16, UI_B, T_CREAM);
+    text_(8, 16, "WAIT", 4, T_CREAM);
+  }
+  text_(13, 16, "SE", 2, T_BRASS);
+  text_(16, 16, "BAG", 3, T_BRASS);
+}
+static void foot(void) {
+  uint8_t i;
+  row_clear(17);
+  text_(0, 17, "YOURS", 5, T_BRASS);
+  four_draw(6, 17, cx.s[0].four, T_BRASS);
+  if (fight_ui == UI_CHOOSE)
+    for (i = 0; i < fight_pips && i < 6u; i++) put_((uint8_t)(19u - i), 17, UI_PIP_ON, T_CREAM);
+}
+static void arrow_(uint8_t on) {
+  set_sprite_tile(39, SPR_ARROW0);
+  set_sprite_prop(39, 0);
+  move_sprite(39, on ? 84u : 0u, on ? (uint8_t)(88u + ((sys_time >> 4) & 1u)) : 0u);
+}
+
+/* ---- what the move in hand would do (the box's second row and the = cell) ---- */
+static uint8_t pv_kind_; /* CX_* outcome, CX_EV_FORGE, or 0xff none */
+static uint16_t pv_r_;
+static uint8_t pv_known_;
+static void preview(void) {
+  uint16_t x = hand_id(), r = CX_NONE, y;
+  uint8_t o, mk, e;
+  char s[24], nm[14];
+  pv_kind_ = 0xffu;
+  pv_r_ = CX_NONE;
+  pv_known_ = 0;
+  eye_tool_ = 0xffu;
+  eye_kind_ = 0;
+  box_top();
+  if (fight_ui != UI_CHOOSE || x == CX_NONE) return;
+  if (fight_look) {
+    strcpy(s, cx_cat(x) == CX_C_PLACE ? "LOCKED WHEN SET" : "THEIRS");
+    line(s, T_CREAM);
+    return;
+  }
+  if (cx.pot == CX_NONE && fight_mark != 0xffu &&
+      fight_mark != tl_[fight_cursor]) { /* a forge: the marked one + this */
+    y = cx_tool(0, fight_mark);
+    r = cx_recipe(y, x);
+    pv_kind_ = CX_EV_FORGE;
+    pv_r_ = r;
+    pv_known_ = r != CX_NONE && knows_(x, y);
+    if (r == CX_NONE) {
+      line("NOTHING", T_CREAM);
       return;
     }
-    crucible_get_name(id, n);
-    text_(0, 17, n, 12, T_CREAM);
-    put_(13, 17, UI_A, T_CREAM);
-    text_(14, 17, "FUSE", 4, T_CREAM);
-    return;
-  }
-  if (fight_cursor >= p->nhand) {
-    put_(13, 17, UI_B, T_CREAM);
-    text_(14, 17, "GUARD", 5, T_CREAM);
-    return;
-  }
-  crucible_get_name(p->kit[p->hand[fight_cursor]], n);
-  text_(0, 17, n, 7, T_CREAM); /* the card, A PLAY, B GUARD */
-  put_(7, 17, UI_A, T_CREAM);
-  text_(8, 17, "PLAY", 4, T_CREAM);
-  put_(13, 17, UI_B, T_CREAM);
-  text_(14, 17, "GUARD", 5, T_BRASS);
-}
-
-/* ---- opening a duel ---- */
-/* the opponent's kit: its faction's category, depth within reach of the chapter, two of each stance where it can,
- * from a seeded walk (no table); fitted to the budget like any kit */
-static void opp_kit(uint8_t f, uint8_t cap, uint16_t *kit) {
-  uint8_t cat = LIKE_CAT[f], have[3] = {0, 0, 0}, n = 0, m, st, tries;
-  uint16_t first = core.cat_first[cat], end = core.cat_first[cat + 1u], id, r = fr.ai | 1u, range;
-  for (st = 0; st < 6u; st++) kit[st] = CRU_NONE;
-  if (end <= first) {
-    first = 0;
-    end = core.items;
-  }
-  range = (uint16_t)(end - first);
-  for (tries = 0; tries < 64u && n < 6u;
-       tries++) { /* seeded samples from its category: within reach, two of each stance */
-    r ^= (uint16_t)(r << 7);
-    r ^= (uint16_t)(r >> 9);
-    r ^= (uint16_t)(r << 8);
-    id = cri_shelf(&core, (uint16_t)(first + r % range));
-    if (cri_depth(&core, id) > cap) continue;
-    m = fr_stance(id);
-    st = (m & 1u) ? 0u : (m & 2u) ? 1u : 2u;
-    if (have[st] >= 2u && tries < 40u) continue;
-    have[st]++;
-    kit[n++] = id;
-  }
-  while (n < 6u) {
-    kit[n] = n && kit[n - 1u] != CRU_NONE ? kit[n - 1u] : cri_shelf(&core, first);
-    n++;
-  }
-  for (st = 0; st < 8u && fr_kit_cost(kit, 6) > 12u; st++) { /* the dearest becomes a copy of the cheapest */
-    uint8_t top = 0, low = 0, k;
-    for (k = 1; k < 6u; k++) {
-      if (fr_cost(kit[k]) > fr_cost(kit[top])) top = k;
-      if (fr_cost(kit[k]) < fr_cost(kit[low])) low = k;
+    if (!pv_known_) {
+      line("FORGE ?", T_BRASS);
+      return;
     }
-    if (top == low) break;
-    kit[top] = kit[low];
-  }
-}
-/* the first contact (5.7): HUM, HUM, WALL from the starters; it plays HUM on its first turn */
-static uint8_t tutor_kit(uint16_t *kit) {
-  uint16_t id, first = player_owned_next(0), n;
-  uint8_t h = 0, w = 0, m;
-  for (id = first, n = 0; id < core.items && n < core.items && (h < 2u || w < 1u); n++, id = player_owned_next(id)) {
-    if (n && id == first) break;
-    if (!cru_is_starter(&core, id)) continue;
-    m = fr_stance(id);
-    if (m == 1u && h < 2u)
-      kit[h++] = id;
-    else if (m == 2u && !w) {
-      kit[2] = id;
-      w = 1;
+    crucible_get_name(r, nm);
+    strcpy(s, "FORGE ");
+    strcat(s, nm);
+    line(s, T_BRASS);
+  } else {
+    o = cx_outcome(0, x, &r);
+    pv_kind_ = o;
+    pv_r_ = r;
+    if (o == CX_BUILD || o == CX_HIJACK)
+      pv_known_ = knows_(x, cx.pot);
+    else if (o == CX_SPLIT)
+      pv_known_ = knows_(x, r);
+    else
+      pv_known_ = 1;
+    if (!pv_known_) {
+      line(cx.owner == me_() ? "BUILD ?" : "TRY IT?", T_BRASS);
+      return;
+    } /* you don't know this pair: a try */
+    switch (o) {
+    case CX_START: line(fight_mark == tl_[fight_cursor] ? "SET IT ALONE" : "MARK, THEN FORGE", T_BRASS); return;
+    case CX_BUILD:
+      strcpy(s, "BUILD +");
+      s[7] = G_HEAT;
+      s[8] = 0;
+      break;
+    case CX_HIJACK:
+      strcpy(s, "HIJACK +");
+      s[8] = G_HEAT;
+      s[9] = 0;
+      break;
+    case CX_SPLIT:
+      crucible_get_name(r, nm);
+      strcpy(s, strlen(nm) > 11u ? "+" : "SPLIT: +");
+      strcat(s, nm);
+      line(s, T_BRASS);
+      return;
+    case CX_BREAK: line("BREAK IT", T_BRASS); return;
+    default:
+      line(cx.owner == me_() ? "NOTHING: BURNS -" : "NOTHING: IT BURNS", T_CREAM);
+      if (cx.owner == me_()) {
+        fui_line[16] = G_HEAT;
+        fui_line[17] = 0;
+      }
+      return;
     }
+    line(s, T_BRASS);
   }
-  if (h == 1u) kit[1] = kit[0];
-  return (uint8_t)(h && w ? 3u : 0u);
-}
-static uint8_t equip(uint8_t k) {
-  uint8_t id = (uint8_t)(k ? pl.equip >> 4 : pl.equip & 15u);
-  return id < FP_COUNT && (pl.known & BIT16[id]) ? id : FP_NONE;
-}
-/* the arena (3.1): the living room's family % 8 (the home room has none), night lifts focus; derived, never stored */
-static uint8_t arena_now(void) {
-  uint8_t f = fight_force_family != 0xffu ? fight_force_family : room_family();
-  crucible_time_ctx t;
-  crucible_time_context(&t);
-  if (fight_force_part != 0xffu) {
-    t.part = fight_force_part;
-    t.flags |= CT_F_KNOWN;
-  }
-  if ((t.flags & CT_F_KNOWN) && t.part == CT_NIGHT) fr.rules |= FR_R_NIGHT;
-  fight_room = f;
-  return f == 0xffu ? FA_EMPTY : (uint8_t)(f & 7u);
-}
-static void draw_duel(void) {
-  clear_rows(0, 17);
-  if (fight_kind != FK_BOSS) {
-    top_bar();
-    opp_block();
-    text_(12, 10, "VS", 2, T_BRASS);
-  } /* a boss draws its own top (crucible_fight_bossui.c) */
-  me_block();
-  hand_draw();
-  avatar_bg_map(0, 2);
-}
-static void face_open(uint8_t f) {
-  avatar_bg_genome(pl.genome, 0, 2); /* yours, as background tiles (drawn once, then from SRAM) */
-  avatar_make((uint16_t)(fight_seed ^ 0xb055u), f); /* theirs, the sprites crucible.c streams */
-  avatar_fx((uint8_t)(f == 1u ? 3u : f == 2u ? 2u : f == 3u ? 5u : 4u));
-}
-/* the alignment's quiet lean (keel_dialogue_choice.h kdc_nudge, kept local): axis 0 order, 1 heart, clamped to 60 */
-static void kdc_nudge(uint8_t *k, uint8_t axis, int8_t d) {
-  int16_t v = (int16_t)(int8_t)k[14u + axis] + d;
-  k[14u + axis] = (uint8_t)(int8_t)(v > 60 ? 60 : v < -60 ? -60 : v);
-}
-static void learn(uint8_t id) { /* a passive learned by living it: one line, never a menu */
-  if (pl.known & BIT16[id]) return;
-  pl.known |= BIT16[id];
-  say_text(id == FP_SCAR       ? "SOMETHING IN YOU HARDENS"
-           : id == FP_UNDERTOW ? "YOU LEARN TO PULL BACK"
-                               : "YOU LEARN TO HOLD IT");
-}
-static void duel_open(uint8_t f, uint8_t level) {
-  crucible_story *s = talk_saga();
-  uint16_t kit[6], okit[6];
-  uint8_t pas[2], opas[2], hp, n, k, sk;
-  crucible_time_ctx t;
-  fight_kind = FK_DUEL;
-  faction_ = f < 6u ? f : 0u;
-  strcpy(who_, FNAME[faction_]);
-  fight_t0 = sys_time;
-  fight_gauntlet = flow_gauntlet ? 1u : 0u;
-  flow_gauntlet = 0;
-  scene_draw(SCENE_RECORDS);
-  clear_rows(0, 17); /* the bench goes at once; the figure is made behind the tear */
-  fight_seed = (uint16_t)((uint16_t)s->seed ^ ((uint16_t)faction_ * 0x3a1u) ^ ((uint16_t)pl.duels << 9) ^ 0x6b5du);
-  cosm_ ^= (uint16_t)DIV_REG << 8;
-  fr_begin(fight_seed);
-  fight_tutor = !(pl.flags & PF_FIRST_DUEL);
-  fr.arena = fight_tutor ? FA_EMPTY : arena_now();
-  crucible_time_context(&t);
-  if (fight_force_special != 0xffu) t.special = fight_force_special;
-  fight_glitch = 0;
-  if (!fight_tutor && (s->lucid < 64u || t.special == CT_SP_333)) {
-    fight_glitch = (uint8_t)(1u + s->lucid % 3u);
-    if (fight_glitch == 1u)
-      fr.rules |= FR_R_INVERT;
-    else if (fight_glitch == 2u)
-      fr.rules |= FR_R_FOG;
-  }
-  for (k = 0; k < 6u; k++)
-    if (cru_story_tier(s, k) >= CRU_TIER_FRIEND) pl.known |= BIT16[TEACH[k]]; /* friends teach */
-  (void)player_kit(kit);
-  pas[0] = equip(0);
-  pas[1] = player_slots() >= 2u ? equip(1) : FP_NONE;
-  hp = (uint8_t)(8u + player_attr(PA_GRIT));
-  if (s->scale == CRU_STORY_GENTLE)
-    hp = (uint8_t)(hp + 2u);
-  else if (s->scale == CRU_STORY_HARSH)
-    hp = (uint8_t)(hp - 2u);
-  fr_side_init(0, kit, 6, pas, hp, player_attr(PA_FOCUS));
-  opas[0] = opas[1] = FP_NONE;
-  if (fight_tutor)
-    n = tutor_kit(okit);
-  else {
-    opp_kit(faction_, (uint8_t)(3u + level), okit);
-    n = 6;
-    if (level >= 2u) opas[0] = TEACH[faction_];
-    if (level >= 5u) opas[1] = (uint8_t)(fr.ai % 3u == 0u ? FP_ECHO : fr.ai % 3u == 1u ? FP_SCAR : FP_PRISM);
-  }
-  if (!n) {
-    opp_kit(faction_, 3, okit);
-    n = 6;
-    fight_tutor = 0;
-  }
-  fr_side_init(1, okit, n, opas, 8, 0);
-  sk = level <= 1u ? 2u : level <= 3u ? 3u : level <= 5u ? 4u : 6u;
-  fr_ai_setup(faction_, fight_tutor ? 1u : sk);
-  won_turns_ = lost_turns_ = 0;
-  fuse_ = 0xffu;
-  fight_cursor = 0;
-  flip_ = 0;
-  xp_ = 0;
-  gained_ = 0;
-  fight_end = 0;
-  fight_ui = UI_INTRO;
-  intro_t_ = 0;
-  fx_ = FIGHT_FX_TEAR;
-  avatar_bg_genome(pl.genome, 0, 2);
-  draw_duel(); /* the screen, your face from SRAM, then theirs is made */
-  avatar_make((uint16_t)(fight_seed ^ 0xb055u), faction_);
-  avatar_fx((uint8_t)(faction_ == 1u ? 3u : faction_ == 2u ? 2u : faction_ == 3u ? 5u : 4u));
-  if (fight_tutor)
-    say_text("THE WALLS KEEP THE NOISE IN");
-  else if (fight_glitch)
-    say_text(fight_glitch == 1u   ? "THE ROOM TURNS OVER"
-             : fight_glitch == 2u ? "YOU CANNOT SEE THEIR HANDS"
-                                  : "YOUR THINGS WILL NOT HOLD STILL");
-  else
-    say(SAY_TAUNT, CRU_NONE);
-}
-
-/* ---- a turn ---- */
-static uint8_t ai_act_;
-/* the engine runs in the host's side order on both carts; the guest's screen keeps itself as side 0 in between */
-static void eng_draw(void) {
-  if (fight_swap) fr_swap_sides();
-  fr_draw();
-  if (fight_swap) fr_swap_sides();
-}
-static uint8_t eng_hash(void) {
-  uint8_t h;
-  if (fight_swap) fr_swap_sides();
-  h = fr_hash();
-  if (fight_swap) fr_swap_sides();
-  return h;
-}
-static void turn_start(void) {
-  uint8_t k;
-  fr_side *p = &fr.s[0];
-  eng_draw();
-  if (fight_glitch == 3u && p->nhand && fr.turn > 1u) { /* DRIFT: one of your hand becomes its dream cousin */
-    crucible_story *s = talk_saga();
-    uint8_t i = (uint8_t)(fr.turn % p->nhand);
-    uint16_t id = cru_dream_slot(&core, s, p->kit[p->hand[i]]);
-    if (id < core.items) fr_set_card(0, p->hand[i], id);
-  }
-  if (fight_kind == FK_DUEL) {
-    if (fight_tutor && fr.turn == 1u) {
-      for (ai_act_ = FR_GUARD_ACT, k = 0; k < fr.s[1].nhand; k++)
-        if (fr_legal(1, FR_ACT(FR_PLAY, k, 0, FR_HUM))) {
-          ai_act_ = FR_ACT(FR_PLAY, k, 0, FR_HUM);
-          break;
-        }
+  /* the eye: the first of their things that could take what you would leave standing, as far as you know */
+  {
+    cx_state *bk = (cx_state *)fr_scratch;
+    uint16_t w;
+    uint8_t ti[16], n, k;
+    if (sizeof(cx_state) > sizeof fr_scratch) return;
+    if (pv_kind_ == CX_EV_FORGE) {
+      uint8_t a = fight_mark, b = tl_[fight_cursor];
+      w = CX_ACT(CX_FORGE, a < b ? a : b, a < b ? b : a);
     } else
-      ai_act_ = 0xffu; /* it thinks a little each frame while you choose, once the hands' fusions are known */
+      w = CX_ACT(CX_ADD, tl_[fight_cursor], 0);
+    memcpy(bk, &cx, sizeof cx);
+    cx_do(w);
+    if (cx.pot != CX_NONE && cx.owner == 0) {
+      n = tools_of(1, ti);
+      for (k = 0; k < n; k++) {
+        y = cx_tool(1, ti[k]);
+        mk = cx_outcome(1, y, &r);
+        e = mk == CX_HIJACK && knows_(y, cx.pot) ? 3u : mk == CX_SPLIT && knows_(y, r) ? 2u : mk == CX_BREAK ? 1u : 0u;
+        if (e > eye_kind_) {
+          eye_kind_ = e;
+          eye_tool_ = ti[k];
+          if (e == 3u) break;
+        }
+      }
+    }
+    memcpy(&cx, bk, sizeof cx);
   }
-  ai_locked_ = 0;
-  ai_lock_at_ = (uint8_t)(40u + (cosm() & 127u));
-  vs_got_ = 0;
-  ready_ = 0;
-  fight_cursor = 0;
-  flip_ = 0;
-  fuse_ = 0xffu;
-  pips_ = fight_kind == FK_VERSUS ? link_fight_pips() : 4u;
-  pip_t_ = 0;
-  hold_b_ = 0;
-  fight_me = 0xffu;
-  fight_them = 0xffu;
-  fight_ui = UI_CHOOSE;
-  if (fight_glitch == 1u && fr.turn == 3u) say_text("THE GLYPHS TURN UPSIDE DOWN");
-  top_bar();
-  opp_block();
-  me_block();
-  hand_draw();
-  answer_line();
-  fx_ |= FIGHT_FX_CHARGE;
+  box_top();
 }
-/* the outcome of a resolved turn: the effects, the sound, the line */
-static void outcome_show(void) {
-  char s[20], n[3];
-  int8_t mine = fr.dmg[0], theirs = fr.dmg[1];
-  fr_cardv c;
+
+static void end_(uint8_t r);
+/* ---- turns ---- */
+static void redraw_all(void) {
+  header();
+  box_top();
+  box_line();
+  tab();
+  name_row();
+  hints();
+  foot();
+}
+static uint8_t story_(void) { return fight_kind != FK_VERSUS; }
+static void turn_start(void) {
+  uint8_t k = cx.act;
+  cx_begin_turn();
+  fight_look = 0;
+  fight_mark = 0xffu;
+  tools_now();
+  fight_cursor = 0;
+  hold_b_ = 0;
+  fight_pips = (uint8_t)(4u + (story_() ? player_attr(PA_FOCUS) : 0u));
+  if (fight_kind == FK_VERSUS) fight_pips = link_fight_pips();
+  pip_t_ = 0;
+  partner_ = 0;
+  if (k == 0 && fight_kind == FK_BOSS && link_scene_shared()) { /* a shared boss: who answers this turn */
+    link_scene_round(cx.turn);
+    if (!link_scene_mine()) {
+      partner_ = 1;
+      fight_ui = UI_WAIT;
+      line("THEY ANSWER", T_BRASS);
+      redraw_all();
+      return;
+    }
+  }
+  if (k == 0) {
+    fight_ui = UI_CHOOSE;
+    preview();
+  } else {
+    fight_ui = UI_WAIT;
+    think_ = 0;
+    vs_got_ = 0;
+    if (story_()) {
+      fo_plan = (fight_kind == FK_BOSS) ? fs_plan() : CX_NONE;
+      if (cx.pot == CX_NONE && fo_plan != CX_NONE && cx_legal(1, fo_plan)) {
+        cx_ai_word = fo_plan;
+      } /* its telegraphed forge */
+      else
+        cx_ai_begin(1, fo_seed, fo_know, fo_skill);
+    }
+    line(fight_kind == FK_VERSUS ? "THEY THINK" : "IT THINKS", T_CREAM);
+  }
+  redraw_all();
+  prev_cur_ = 0xffu;
+}
+/* a move's line: the long prefix when it fits the box's 19 columns, else the short one (a name is at most 13) */
+static void say_(char *s, const char *lng, const char *sht, const char *nm) {
+  strcpy(s, (uint8_t)(strlen(lng) + strlen(nm)) <= 19u ? lng : sht);
+  strcat(s, nm);
+}
+/* the move is played: the engine turns, the screen shows what it did */
+static void show_after(uint8_t k) {
+  char s[24], nm[14];
+  uint8_t ev = cx.ev, mine = k == me_(), ph;
   show_t_ = 0;
   fight_ui = UI_SHOW;
-  if (fr.out == 1) {
-    won_turns_++;
-    fx_ |= FIGHT_FX_FLASH | FIGHT_FX_SHAKE;
-    sound_play(SFX_NEW);
-    strcpy(s, "YOU HIT ");
-    num_(n, (uint8_t)theirs, theirs >= 10 ? 2u : 1u);
-    strcat(s, n);
-  } else if (fr.out == -1) {
-    lost_turns_++;
-    fx_ |= FIGHT_FX_TEAR;
-    sound_play(SFX_DENY);
-    strcpy(s, "IT HITS ");
-    num_(n, (uint8_t)mine, mine >= 10 ? 2u : 1u);
-    strcat(s, n);
-  } else if (fr.out == 0) {
-    fx_ |= FIGHT_FX_CHARGE;
+  fight_turns_seen++;
+  nm[0] = 0;
+  if (cx.er != CX_NONE && cx.er < core.items) crucible_get_name(cx.er, nm);
+  s[0] = 0;
+  switch (ev) {
+  case CX_START:
+    crucible_get_name(cx.ex, nm);
+    say_(s, mine ? "SET: " : "IT SETS ", mine ? "SET:" : "SETS:", nm);
+    sound_play(SFX_PICK);
+    break;
+  case CX_EV_FORGE:
+    say_(s, mine ? "FORGED " : "IT MADE ", mine ? "MADE:" : "IT:", nm);
+    fui_fx |= FIGHT_FX_TEAR;
+    sound_play(SFX_MIX);
+    if (mine) fs_note_made(cx.er);
+    break;
+  case CX_BUILD:
+    say_(s, mine ? "BUILT " : "IT ADDS ", mine ? "BUILT:" : "ADDS:", nm);
+    fui_fx |= FIGHT_FX_TEAR;
+    sound_play(SFX_MIX);
+    if (mine) fs_note_made(cx.er);
+    break;
+  case CX_HIJACK:
+    if (!mine)
+      fo_took = 1;
+    else if (cx.chain > chain_best_)
+      chain_best_ = cx.chain;
+    say_(s, mine ? "HIJACK! " : "TAKEN! ", mine ? "MINE:" : "TAKEN:", nm);
+    fui_fx |= FIGHT_FX_TEAR | (mine ? 0u : FIGHT_FX_CHARGE);
+    sound_play(mine ? SFX_NEW : SFX_DENY);
+    if (mine) fs_note_made(cx.er);
+    if (cx.chain >= 2u) {
+      uint8_t n = (uint8_t)strlen(s);
+      if (n <= 16u) {
+        s[n] = ' ';
+        s[n + 1u] = 'X';
+        s[n + 2u] = (char)('0' + cx.chain);
+        s[n + 3u] = 0;
+      }
+    }
+    break;
+  case CX_SPLIT:
+    say_(s, mine ? "SPLIT! +" : "IT TOOK ", mine ? "+" : "TOOK:", nm);
+    fui_fx |= FIGHT_FX_TEAR;
     sound_play(SFX_SWAP);
-    strcpy(s, "EVEN ");
-    num_(n, (uint8_t)theirs, 1);
-    strcat(s, n);
-    strcat(s, ":");
-    num_(n, (uint8_t)mine, 1);
-    strcat(s, n);
-  } else {
+    break;
+  case CX_BREAK:
+    strcpy(s, mine ? "BREAK!" : "IT BROKE YOURS");
+    fui_fx |= FIGHT_FX_TEAR | FIGHT_FX_SHAKE;
     sound_play(SFX_CLOSE);
-    strcpy(s, theirs || mine ? "GUARDED, CHIPPED" : "GUARDED");
-    fx_ |= theirs || mine ? FIGHT_FX_SHAKE : 0u;
+    break;
+  case CX_MISS:
+    strcpy(s, mine ? "NOTHING. IT BURNS" : "IT MISSES");
+    sound_play(SFX_NOTHING);
+    break;
+  case CX_EV_POUR: {
+    char n2[3];
+    num_(n2, cx.dmg, cx.dmg >= 10u ? 2u : 1u);
+    strcpy(s, mine ? "POUR! THEM -" : "IT POURS: -");
+    strcat(s, n2);
   }
-  if (fr.sever[1]) strcat(s, " SEVER");
-  status(s, T_CREAM);
-  if (FR_KIND(fight_me) == FR_FUSE && fr_card(0, fight_me, &c)) say(SAY_NOTICE, c.id);
-  if (fr.s[0].lost_hp >= 5u) learn(FP_SCAR);
-  if (fr.s[0].lostrow >= 2u) learn(FP_UNDERTOW);
-  if (fr.s[0].wins >= 3u) learn(FP_LUCID);
-  top_bar();
-  opp_block();
-  me_block();
-  hand_draw();
+    if (mine) dealt_ = (uint16_t)(dealt_ + cx.dmg);
+    fui_fx |= mine ? FIGHT_FX_SHAKE | FIGHT_FX_TEAR : FIGHT_FX_FLASH;
+    sound_play(mine ? SFX_FLASH : SFX_DENY);
+    break;
+  default: strcpy(s, mine ? "YOU WAIT" : "IT WAITS"); break;
+  }
+  line(s, mine ? T_BRASS : T_CREAM);
+  for (ph = 0; ph < 2u; ph++)
+    if (cx.s[ph].tw && cx_phase(ph) != prev_phase_[ph]) {
+      prev_phase_[ph] = cx_phase(ph);
+      fui_fx |= FIGHT_FX_PHASE;
+      if (ph == 1u) fs_say(SAY_HURT, CX_NONE);
+    }
+  fight_cursor = 0;
+  fight_mark = 0xffu;
+  fight_look = 0;
+  tools_now();
+  redraw_all();
 }
-static void lock(uint8_t act) {
-  fight_me = act;
-  sound_play(SFX_PICK);
-  fx_ |= FIGHT_FX_CHARGE;
-  if (fight_kind == FK_VERSUS) {
-    fight_ui = UI_WAIT;
-    vs_sent_t_ = 0;
-    link_fturn(act, fr.turn, eng_hash(), pips_);
-    answer_line();
+static void hash_now(uint8_t *h) {
+  if (fight_swap) cx_swap();
+  *h = cx_hash();
+  if (fight_swap) cx_swap();
+}
+static void play(uint16_t w) {
+  uint8_t k = cx.act;
+  pot_was_ = cx.pot;
+  owner_was_ = cx.owner;
+  fight_word = w;
+  if (fight_kind == FK_VERSUS && k == 0) {
+    uint8_t h;
+    hash_now(&h);
+    link_fturn(w, cx.turn, h);
+  }
+  if (fight_kind == FK_BOSS && k == 0 && !partner_ && link_scene_shared())
+    link_scene_send((uint8_t)w, (uint8_t)(w >> 8), 0); /* the partner plays it too */
+  cx_do(w);
+  show_after(k);
+}
+/* my turn */
+static void choose(uint8_t pressed, uint8_t dt) {
+  uint8_t held = joypad(), t;
+  if ((pressed & J_SELECT) && !(fight_kind == FK_VERSUS && (link_rule(3) & 32u))) {
+    fight_look ^= 1u;
+    fight_cursor = 0;
+    fight_mark = 0xffu;
+    tools_now();
+    sound_play(SFX_SWAP);
+    preview();
+    name_row();
+    hints();
+    box_line();
     return;
   }
-  if (!ready_) {
-    fr_pairs_all();
-    ready_ = 1;
-    if (fight_kind == FK_DUEL && ai_act_ == 0xffu) fr_ai_begin(fog());
+  if (pressed & (J_LEFT | J_RIGHT)) {
+    if (nt_)
+      fight_cursor = (uint8_t)((pressed & J_LEFT) ? (fight_cursor ? fight_cursor - 1u : nt_ - 1u)
+                                                  : (fight_cursor + 1u >= nt_ ? 0u : fight_cursor + 1u));
+    sound_play(SFX_MOVE);
+    preview();
+    name_row();
+    box_line();
+    return;
   }
-  while (ai_act_ == 0xffu) ai_act_ = fr_ai_step(32); /* you were quicker than it: it finishes thinking now */
-  fight_them = ai_act_;
-  fr_resolve(fight_me, fight_them);
-  outcome_show();
-}
-/* CHOOSE: LEFT/RIGHT the hand, UP flips a dual, DOWN marks a fuse (LEFT/RIGHT its pair, A fuses, DOWN or B cancels),
- * A plays, B guards (held a second in a duel: flee), SELECT says the rules in play */
-static uint8_t choose(uint8_t pressed, uint8_t dt) {
-  const fr_side *p = &fr.s[0];
-  uint8_t n = p->nhand, act, st, held = joypad();
-  if (fuse_ != 0xffu) {
-    if (pressed & (J_LEFT | J_RIGHT)) {
-      do {
-        partner_ = (uint8_t)((pressed & J_LEFT) ? (partner_ ? partner_ - 1u : n - 1u)
-                                                : (partner_ + 1u >= n ? 0u : partner_ + 1u));
-      } while (partner_ == fuse_ && n > 1u);
-      fight_cursor = partner_;
-      sound_play(SFX_MOVE);
-      hand_draw();
-      answer_line();
-    } else if (pressed & (J_DOWN | J_B)) {
-      fuse_ = 0xffu;
-      sound_play(SFX_UNDO);
-      hand_draw();
-      answer_line();
-    } else if (pressed & J_A) {
-      act = fuse_act();
-      if (act != 0xffu) {
-        fuse_ = 0xffu;
-        lock(act);
-        return FIGHT_GOING;
-      }
-      sound_play(SFX_DENY);
+  if (fight_look) {
+    if (pressed & J_B) {
+      fight_look = 0;
+      fight_cursor = 0;
+      tools_now();
+      preview();
+      name_row();
+      hints();
+      box_line();
     }
-  } else {
-    if (pressed & J_LEFT) {
-      fight_cursor = fight_cursor ? (uint8_t)(fight_cursor - 1u) : (uint8_t)(n ? n - 1u : 0u);
-      sound_play(SFX_MOVE);
-      hand_draw();
-      answer_line();
-    } else if (pressed & J_RIGHT) {
-      fight_cursor = (uint8_t)(fight_cursor + 1u >= n ? 0u : fight_cursor + 1u);
-      sound_play(SFX_MOVE);
-      hand_draw();
-      answer_line();
-    } else if ((pressed & J_UP) && fight_cursor < n) {
-      st = p->kst[p->hand[fight_cursor]];
-      if (st == 3u || st == 5u || st == 6u) {
-        flip_ ^= BIT8[fight_cursor];
-        sound_play(SFX_SWAP);
-        hand_draw();
+    return;
+  }
+  if ((pressed & J_A) && nt_) {
+    t = tl_[fight_cursor];
+    if (cx.pot == CX_NONE) {
+      if (fight_mark == 0xffu) {
+        fight_mark = t;
+        sound_play(SFX_PICK);
+        preview();
+        hints();
+        box_line();
+        return;
       }
-    } else if ((pressed & J_DOWN) && !ready_)
-      sound_play(SFX_MOVE); /* still reading what the hand makes */
-    else if ((pressed & J_DOWN) && n >= 2u &&
-             p->focus >=
-                 2u - ((p->pas[0] == FP_CATALYST && (p->on & 1u)) || (p->pas[1] == FP_CATALYST && (p->on & 2u)))) {
-      fuse_ = fight_cursor;
-      partner_ = (uint8_t)(fuse_ + 1u >= n ? 0u : fuse_ + 1u);
-      fight_cursor = partner_;
-      sound_play(SFX_MOVE);
-      hand_draw();
-      answer_line();
-    } else if ((pressed & J_A) && fight_cursor < n) {
-      act = FR_ACT(FR_PLAY, fight_cursor, 0, live_stance(fight_cursor));
-      if (fr_legal(0, act)) {
-        lock(act);
-        return FIGHT_GOING;
+      if (fight_mark == t) {
+        play(CX_ACT(CX_ADD, t, 0));
+        return;
       }
-    } else if (pressed & J_SELECT)
-      say_text(fr.arena == FA_HUM       ? "THE LIGHTS HUM LOUDER"
-               : fr.arena == FA_WALL    ? "THE CARPET IS WET"
-               : fr.arena == FA_DREAM   ? "THE AIR IS TOO STILL"
-               : fr.arena == FA_FLICKER ? "THE ROOM BLINKS"
-               : fr.arena == FA_NARROW  ? "THE WALLS ARE CLOSE"
-               : fr.arena == FA_ECHO    ? "EVERY SOUND COMES TWICE"
-               : fr.arena == FA_EXIT    ? "A GREEN SIGN GLOWS"
-                                        : "NOTHING HERE");
-    /* B: a tap guards, held a second a duel is fled. The press is the latched one (a busy loop can miss a short tap
-     * in the held state); hold_b_ counts from it, 1 + frames held */
-    if (pressed & J_B) hold_b_ = 1;
-    if (hold_b_) {
-      if (held & J_B) {
-        hold_b_ = (uint8_t)(hold_b_ + dt);
-        if (fight_kind == FK_DUEL && hold_b_ >= FLEE_FRAMES) {
-          fight_end = 3;
-          return FIGHT_FLED;
+      {
+        uint8_t a = fight_mark < t ? fight_mark : t, b = fight_mark < t ? t : fight_mark;
+        uint16_t w = CX_ACT(CX_FORGE, a, b);
+        if (cx_legal(0, w)) {
+          play(w);
+          return;
         }
-      } else {
-        hold_b_ = 0;
-        lock(FR_GUARD_ACT);
-        return FIGHT_GOING;
+        sound_play(SFX_DENY);
+        return;
       }
     }
-  }
-  if (!ready_) {
-    if (fr_pairs_step()) {
-      ready_ = 1;
-      if (fight_kind == FK_DUEL && ai_act_ == 0xffu) fr_ai_begin(fog());
-      answer_line();
+    if (cx.owner == me_() && cx_locked_to(0)) {
+      sound_play(SFX_DENY);
+      return;
     }
-  } /* a lookup a frame */
-  else if (fight_kind == FK_DUEL && ai_act_ == 0xffu)
-    ai_act_ = fr_ai_step(4);
-  if (fight_kind == FK_DUEL && !ai_locked_ && ai_act_ != 0xffu) {
-    if (ai_lock_at_ > dt)
-      ai_lock_at_ = (uint8_t)(ai_lock_at_ - dt);
-    else {
-      ai_locked_ = 1;
-      opp_block();
+    play(CX_ACT(CX_ADD, t, 0));
+    return;
+  }
+  if (pressed & J_B) hold_b_ = 1;
+  if (hold_b_) {
+    if (held & J_B) {
+      hold_b_ = (uint8_t)(hold_b_ + dt);
+      if (hold_b_ >= FLEE_FRAMES && (fight_kind == FK_DUEL || fight_kind == FK_GAUNTLET) && cx.pot == CX_NONE &&
+          fight_mark == 0xffu) {
+        fight_end = 3;
+        end_(3);
+        return;
+      }
+    } else {
+      hold_b_ = 0;
+      if (cx.pot == CX_NONE) {
+        if (fight_mark != 0xffu) {
+          fight_mark = 0xffu;
+          sound_play(SFX_UNDO);
+          preview();
+          hints();
+          box_line();
+        }
+        return;
+      }
+      play(CX_ACT(cx.owner == me_() ? CX_POUR : CX_PASS, 0, 0));
+      return;
     }
   }
   pip_t_ = (uint16_t)(pip_t_ + dt);
   if (pip_t_ >= PIP_FRAMES) {
     pip_t_ = 0;
-    fx_ |= FIGHT_FX_CHARGE;
-    if (pips_) {
-      pips_--;
-      me_block();
+    if (fight_pips) {
+      fight_pips--;
+      foot();
       sound_play(SFX_MOVE);
     }
-    if (!pips_) {
-      fuse_ = 0xffu;
-      lock(FR_GUARD_ACT);
-    } /* the last pip ran out: an unlocked side guards */
+    if (!fight_pips) { /* time: your own pot pours, theirs stands, an empty one takes the first thing you hold */
+      fight_mark = 0xffu;
+      if (cx.pot == CX_NONE) {
+        uint8_t ti[16];
+        if (tools_of(0, ti))
+          play(CX_ACT(CX_ADD, ti[0], 0));
+        else
+          play(CX_ACT(CX_PASS, 0, 0));
+      } else
+        play(CX_ACT(cx.owner == me_() ? CX_POUR : CX_PASS, 0, 0));
+    }
   }
-  return FIGHT_GOING;
 }
-/* ---- the end of a duel: what it gives and costs (7.1) ---- */
-static void duel_end(uint8_t r) {
-  crucible_story *s = talk_saga();
-  uint16_t got = CRU_NONE;
-  uint8_t k;
-  char line[20];
-  pl.flags |= PF_FIRST_DUEL;
-  if (r == 1u) { /* won: XP 15; a quarter of the time one of its hand, if new; its faction -3, the rival +3 */
-    xp_ = fight_gauntlet ? 15u * 3u + 30u : 15u;
-    if (pl.duels < 255u) pl.duels++;
-    cru_story_shift(s, faction_, -3);
-    cru_story_shift(s, cru_faction_rival(faction_), 3);
-    if (!(fr.ai & 3u))
-      for (k = 0; k < fr.s[1].nhand; k++) {
-        uint16_t id = fr.s[1].kit[fr.s[1].hand[k]];
-        if (!cru_owned(&core, id) && cru_story_gain(&core, s, id)) {
-          got = id;
-          break;
-        }
+/* their turn: the AI thinks a little each frame, or the partner's word arrives */
+static void wait_(uint8_t dt) {
+  uint8_t i;
+  think_ = think_ < 250u ? (uint8_t)(think_ + dt) : think_;
+  if (fight_kind == FK_VERSUS) {
+    uint16_t w;
+    uint8_t h, t = cx.turn;
+    if (link_xturn_in(&w, t, &h)) {
+      uint8_t mine;
+      hash_now(&mine);
+      if (h != mine) {
+        link_fsync_ask();
+        return;
       }
-    cru_story_act(s, CRU_ACT_WIN);
-    strcpy(line, "IT FALLS APART");
-  } else if (r == 3u) {
-    xp_ = 0;
-    cru_story_lucid(s, -8);
-    cru_story_act(s, CRU_ACT_REFUSE);
-    strcpy(line, "YOU RAN");
+      if (!cx_legal(1, w)) w = CX_ACT(cx.pot == CX_NONE ? CX_PASS : cx.owner == 1u ? CX_POUR : CX_PASS, 0, 0);
+      play(w);
+    }
+    return;
+  }
+  if (partner_) {
+    uint8_t p0, p1, c;
+    if (link_scene_take(&p0, &p1, &c)) {
+      uint16_t w = (uint16_t)(p0 | ((uint16_t)p1 << 8));
+      if (!cx_legal(0, w)) w = CX_ACT(cx.pot == CX_NONE ? CX_PASS : cx.owner == 0u ? CX_POUR : CX_PASS, 0, 0);
+      play(w);
+    }
+    return;
+  } /* (the watcher's SELECT and B: fight_tick) */
+  for (i = 0; i < 3u; i++)
+    if (cx_ai_step()) break;
+  if (cx_ai_word != CX_NONE && think_ >= THINK_MIN) play(cx_ai_word);
+}
+/* ---- the end screen: big letters (2x high, made from the font into the merge row's cell tiles 0..47, free while
+ * those cells are blank and the face is gone), what you made with NEW tags, a stat, the buttons ---- */
+static void big_text(uint8_t y, const char *s, uint8_t colour) {
+  char seen[24];
+  uint8_t ns = 0, i, j, n = (uint8_t)strlen(s), x0, g[16], t[32], k, m, row[20], at[20];
+  if (n > 20u) n = 20u;
+  x0 = (uint8_t)((20u - n) / 2u);
+  for (i = 0; i < n; i++) {
+    char c = s[i];
+    if (c == ' ') {
+      row[i] = GLYPH(' ');
+      at[i] = T_CREAM;
+      continue;
+    }
+    for (j = 0; j < ns; j++)
+      if (seen[j] == c) break;
+    if (j == ns && ns < 24u) {
+      seen[ns] = c;
+      VBK_REG = 0;
+      get_bkg_data(GLYPH(c), 1, g);
+      for (k = 0; k < 16u; k++) {
+        m = (uint8_t)(g[(k >> 1) * 2u] | g[(k >> 1) * 2u + 1u]);
+        t[k * 2u] = colour & 1u ? m : 0u;
+        t[k * 2u + 1u] = colour & 2u ? m : 0u;
+      }
+      VBK_REG = 0;
+      set_bkg_data((uint8_t)(ns * 2u), 2, t);
+      ns++;
+    }
+    row[i] = (uint8_t)(j * 2u);
+    at[i] = 7u;
+  }
+  row_clear(y);
+  row_clear((uint8_t)(y + 1u));
+  VBK_REG = 1;
+  set_bkg_tiles(x0, y, n, 1, at);
+  set_bkg_tiles(x0, (uint8_t)(y + 1u), n, 1, at);
+  VBK_REG = 0;
+  set_bkg_tiles(x0, y, n, 1, row);
+  for (i = 0; i < n; i++)
+    if (s[i] != ' ') row[i]++;
+  set_bkg_tiles(x0, (uint8_t)(y + 1u), n, 1, row);
+}
+static const uint8_t MADE_X[3] = {2, 8, 14};
+static uint8_t made_cell(uint8_t i) {
+  return fs_made_n == 1u ? 1u : fs_made_n == 2u ? (uint8_t)(i ? 2u : 0u) : i;
+} /* 0 CL, 1 CF, 2 CN */
+static void end_draw(void) {
+  char s[20], n2[4];
+  uint8_t i;
+  fui_fx = (uint8_t)((fui_fx & (uint8_t)~FIGHT_FX_FACE) | FIGHT_FX_NOFACE);
+  arrow_(0);
+  for (i = 1; i < 18u; i++)
+    if (i < 3u || i == 8u || i >= 14u || i == 9u) row_clear(i);
+  header();
+  big_text(1, fe_big, fe_win ? 2u : 3u);
+  if (fight_kind == FK_VERSUS) {
+    strcpy(fe_sub, "ROUNDS ");
+    num_(n2, fight_wins[0], 1);
+    strcat(fe_sub, n2);
+    strcat(fe_sub, " TO ");
+    num_(n2, fight_wins[1], 1);
+    strcat(fe_sub, n2);
+  }
+  if (!fe_stat[0]) {
+    strcpy(s, "POURED ");
+    num_(n2, dealt_ > 99u ? 99u : dealt_, dealt_ >= 10u ? 2u : 1u);
+    strcat(s, n2);
+    if (chain_best_ >= 2u) {
+      strcat(s, "  CHAIN ");
+      n2[0] = (char)('0' + chain_best_);
+      n2[1] = 0;
+      strcat(s, n2);
+    }
+    strcpy(fe_stat, s);
+  }
+  text_(1, 9, fs_made_n ? "MADE IN THE FIGHT" : "NOTHING NEW MADE", 17, T_BRASS);
+  for (i = 0; i < fs_made_n && i < 3u; i++) text_(MADE_X[made_cell(i)], 14, "NEW", 3, T_CREAM);
+  centre_(15, fe_sub, T_CREAM);
+  centre_(16, fe_stat, T_BRASS);
+  if (fight_ui == UI_CHOICE) {
+    crucible_story *st = talk_saga();
+    uint8_t deep = st->lucid < 64u && (DIV_REG & 1u);
+    put_(2, 17, UI_A, T_CREAM);
+    put_(3, 17, GLYPH(deep ? '-' : '+'), T_CREAM);
+    put_(8, 17, UI_B, T_CREAM);
+    put_(9, 17, GLYPH(deep ? '+' : '-'), T_CREAM);
+    text_(14, 17, "SE", 2, T_BRASS);
+    put_(16, 17, GLYPH('/'), T_CREAM);
+  } else if (fight_kind == FK_VERSUS) {
+    put_(1, 17, UI_A, T_CREAM);
+    text_(2, 17, "AGAIN", 5, T_CREAM);
+    put_(12, 17, UI_B, T_CREAM);
+    text_(13, 17, "LEAVE", 5, T_CREAM);
   } else {
-    xp_ = r == 2u ? 5u : 5u;
-    if (r == 2u) cru_story_lucid(s, -8);
-    strcpy(line, r == 2u ? "IT WALKS AWAY" : "NEITHER FALLS");
-  } /* a duel loss never destroys elements */
-  cru_story_event(s, CRU_EV_FIGHT, fr.s[0].hp > 0 ? (uint16_t)fr.s[0].hp : 0u, (uint16_t)r);
-  gained_ = player_xp(xp_);
-  player_save();
-  story_save();
-  fight_ui = UI_END;
+    put_(1, 17, UI_A, T_CREAM);
+    text_(2, 17, "OK", 2, T_CREAM);
+  }
+}
+static void end_(uint8_t r) {
   show_t_ = 0;
-  end_line_ = r;
-  status(line, T_CREAM);
-  {
-    char x[12];
-    strcpy(x, "+");
-    num_(x + 1, xp_, xp_ >= 10u ? 2u : 1u);
-    strcat(x, " XP");
-    text_(12, 12, x, 6, T_BRASS);
-  }
-  if (got != CRU_NONE)
-    say(SAY_PLEASED, got);
-  else
-    say(r == 1u ? SAY_HURT : SAY_FAREWELL, CRU_NONE);
-  fx_ |= FIGHT_FX_PHASE;
+  fs_end(r);
+  end_draw();
 }
-
-/* ---- the gauntlet (5.4): three duels behind doors. HP carries over and the deck is not reshuffled; between duels
- * one of two doors: an arena for the next duel, or +2 HP ---- */
-static uint8_t door_arena_, door_at_;
-static void doors_draw(void) {
-  static const char *const AN[7] = {"LIGHTS", "CARPET", "STILL", "BLINK", "NARROW", "ECHO", "EXIT"};
+/* the link's result card in the end screen's frame (the bench band, the pixel title): crucible_link.c */
+void fight_card(const char *big, uint8_t win, const char *l1, const char *l2) BANKED {
   uint8_t y;
-  clear_rows(2, 16);
-  for (y = 4; y < 12u; y++) {
-    text_(3, y, "[    ]", 6, door_at_ ? T_BRASS : T_CREAM);
-    text_(11, y, "[    ]", 6, door_at_ ? T_CREAM : T_BRASS);
-  }
-  text_(4, 7, AN[door_arena_], 4, door_at_ ? T_BRASS : T_CREAM);
-  text_(13, 7, "+2", 2, door_at_ ? T_CREAM : T_BRASS);
-  put_(door_at_ ? 13u : 5u, 13, GLYPH('^'), T_CREAM);
-  status("TWO DOORS", T_CREAM);
-}
-static void doors_open(void) {
-  door_arena_ = (uint8_t)(fr.ai % 7u);
-  door_at_ = 0;
-  fight_ui = UI_DOORS;
-  scene_draw(SCENE_RECORDS);
-  clear_rows(0, 17);
-  say_text("ANOTHER WAITS BEHIND ONE");
-  doors_draw();
-  sound_play(SFX_OPEN);
-}
-static void gauntlet_next(void) { /* through a door: the next figure, the same you */
-  uint16_t okit[6];
-  uint8_t opas[2] = {FP_NONE, FP_NONE}, lvl = talk_saga()->chapter;
-  if (door_at_) {
-    fr.s[0].hp = (int8_t)(fr.s[0].hp + 2);
-    if (fr.s[0].hp > (int8_t)fr.s[0].max) fr.s[0].max = (uint8_t)fr.s[0].hp;
-  } else
-    fr.arena = door_arena_;
-  fight_gauntlet++;
-  faction_ = (uint8_t)(faction_ >= 5u ? 0u : faction_ + 1u);
-  strcpy(who_, FNAME[faction_]);
-  opp_kit(faction_, (uint8_t)(3u + lvl), okit);
-  if (lvl >= 2u) opas[0] = TEACH[faction_];
-  if (fight_gauntlet >= 3u) opas[1] = FP_SCAR; /* the last door's figure has learned to be hurt */
-  fr_side_init(1, okit, 6, opas, 8, 0);
-  fr.turn = 0;
-  fr_ai_setup(faction_, 4);
-  fight_t0 = sys_time;
-  fight_ui = UI_INTRO;
-  avatar_bg_genome(pl.genome, 0, 2);
-  draw_duel();
-  avatar_make((uint16_t)(fight_seed ^ 0xb055u ^ fight_gauntlet), faction_);
-  say(SAY_TAUNT, CRU_NONE);
-  fx_ |= FIGHT_FX_TEAR;
+  char t[21];
+  win_pos_y = 144u;
+  SCY_REG = 0;
+  scene_draw(SCENE_BENCH);
+  for (y = 0; y < 18u; y++)
+    if (y < 3u || y == 8u || y == 9u || y >= 14u) row_clear(y);
+  strncpy(fe_big, big, 13);
+  fe_big[13] = 0;
+  big_text(1, fe_big, win ? 2u : 3u); /* (fe_big: what the card says, for a reader) */
+  strncpy(t, l1, 20);
+  t[20] = 0;
+  centre_(9, t, T_BRASS);
+  strncpy(t, l2, 20);
+  t[20] = 0;
+  centre_(15, t, T_CREAM);
+  put_(1, 17, UI_A, T_CREAM);
+  text_(2, 17, "MENU", 4, T_CREAM);
 }
 
-/* ---- the link versus: the same rules in lockstep; only the action bytes travel (crucible_link.c P_FTURN) ---- */
-static uint8_t vs_setup_; /* 0: the partner's setup has not arrived yet */
-static void versus_setup(void) {
-  uint16_t kit[6], okit[6];
-  uint8_t me = link_role == LINK_HOST ? 0u : 1u, pas[2], opas[2], g[6], next = vs_setup_;
-  if (next) { /* the next bout of a best-of: the same kits (as the engine holds them, host order), a new seed */
-    if (fight_swap) fr_swap_sides();
-    memcpy(me ? okit : kit, fr.s[0].kit, 12);
-    memcpy(me ? kit : okit, fr.s[1].kit, 12);
-    (me ? opas : pas)[0] = fr.s[0].pas[0];
-    (me ? opas : pas)[1] = fr.s[0].pas[1];
-    (me ? pas : opas)[0] = fr.s[1].pas[0];
-    (me ? pas : opas)[1] = fr.s[1].pas[1];
-  } else {
-    link_kit_mine(kit, pas);
-    link_kit_theirs(okit, opas);
+/* ---- rounds and the end ---- */
+static void vs_sides(void) { /* the versus' sides for this round (host order), the guest swapped to see itself */
+  uint16_t bag[CX_BAG], obag[CX_BAG];
+  uint8_t n, on;
+  {
+    uint8_t first = link_fight_first(fight_round); /* in the host's order */
+    link_bags(bag, &n, obag, &on); /* host's then guest's */
+    cx_side_set(0, bag, n, (int8_t)link_fight_hp(0), 0);
+    cx_side_set(1, obag, on, (int8_t)link_fight_hp(1), 0);
+    cx_begin(first);
+    link_round_reset();
+    fight_swap = link_role == LINK_HOST ? 0u : 1u;
+    if (fight_swap) cx_swap();
   }
-  fight_seed = link_fight_seed();
-  fr_begin(fight_seed);
-  fr.arena = link_fight_arena();
-  fr.rules = link_fight_rules();
-  fight_glitch = (fr.rules & FR_R_INVERT) ? 1u : (fr.rules & FR_R_FOG) && (link_rule(3) & 4u) ? 2u : 0u;
-  /* the engine runs in the host's side order on both carts (draws and shuffles follow it); the guest swaps to see itself */
-  if (!me) {
-    fr_side_init(0, kit, 6, pas, link_fight_hp(0), link_fight_focus(0));
-    fr_side_init(1, okit, 6, opas, link_fight_hp(1), link_fight_focus(1));
-  } else {
-    fr_side_init(0, okit, 6, opas, link_fight_hp(0), link_fight_focus(0));
-    fr_side_init(1, kit, 6, pas, link_fight_hp(1), link_fight_focus(1));
-  }
-  fight_swap = me;
-  if (me) fr_swap_sides();
-  if (!next) {
-    avatar_bg_genome(pl.genome, 0, 2);
-    link_partner_genome(g);
-    avatar_make_genome(g);
-  } /* the partner's face, regenerated here from its six bytes */
-  vs_setup_ = 1;
-  draw_duel();
-  if (next) {
-    char l[8];
-    crucible_text_line(EV_AGAIN_FIRST, l, sizeof l, 0);
-    say_text(l);
-  } else
-    say_text("THE SIGNAL HOLDS");
-  fight_t0 = sys_time;
 }
-static void versus_open(void) {
-  fight_kind = FK_VERSUS;
-  faction_ = 3;
-  link_peer(who_);
-  if (!who_[0]) strcpy(who_, "THEM");
-  who_[7] = 0;
-  won_turns_ = lost_turns_ = 0;
-  fuse_ = 0xffu;
-  fight_cursor = 0;
-  flip_ = 0;
-  xp_ = 0;
-  gained_ = 0;
-  fight_end = 0;
-  vs_setup_ = 0;
-  fight_swap = 0;
-  fr_begin(1);
-  fr.s[0].hp = fr.s[1].hp = 1;
-  fight_ui = UI_INTRO;
-  intro_t_ = 0;
-  fx_ = FIGHT_FX_TEAR;
-  scene_draw(SCENE_RECORDS);
-  clear_rows(0, 17);
-  say_text("THE SIGNAL TUNES IN");
-  avatar_make((uint16_t)link_seed, 3);
+static void round_open(void) {
+  if (fight_kind == FK_VERSUS && (fight_round || intro_k_ != 2u)) vs_sides();
+  intro_k_ = 0;
+  fight_look = 0;
+  prev_phase_[0] = prev_phase_[1] = 0;
+  fui_fx = (uint8_t)((fui_fx & (uint8_t)~FIGHT_FX_FACE) | FIGHT_FX_NOFACE | FIGHT_FX_TEAR);
+  turn_start();
 }
-static uint8_t versus_wait(uint8_t dt) {
-  uint8_t act, turn, hash, pip;
-  turn = fr.turn;
-  if (fight_ui != UI_SHOW && link_fturn_in(&act, &turn, &hash, &pip)) {
-    /* the partner's move for this turn (not while showing: the next turn's draw is not done here yet, its hash would differ) */ /* not while showing: the next turn's draw is not done here yet, its hash would differ */
-    if (turn == fr.turn) {
-      if (hash != eng_hash())
-        link_fsync_ask(); /* a desync: the host's state wins */
-      else {
-        fight_them = act;
-        vs_got_ = 1;
-      }
+static void round_over(uint8_t r) { /* r for side 0: 1 won, 2 lost, 3 a draw */
+  char s[20];
+  if (fight_kind == FK_VERSUS) {
+    if (r == 1u)
+      fight_wins[0]++;
+    else if (r == 2u)
+      fight_wins[1]++;
+    if (link_fight_over(r)) {
+      fight_round++;
+      fight_ui = UI_ROUND;
+      show_t_ = 0;
+      strcpy(s, r == 1u ? "ROUND: YOURS" : r == 2u ? "ROUND: THEIRS" : "ROUND: EVEN");
+      line(s, T_BRASS);
+      redraw_all();
+      return;
     }
+    end_(fight_wins[0] > fight_wins[1] ? 1u : fight_wins[0] < fight_wins[1] ? 2u : 5u);
+    return; /* the match's result (a drawn one: NEITHER FALLS) */
   }
-  if (link_result()) return FIGHT_FLED;
-  if (fight_ui == UI_WAIT && vs_got_) {
-    if (!ready_) {
-      fr_pairs_all();
-      ready_ = 1;
-    }
-    if (!fr_legal(1, fight_them)) fight_them = FR_GUARD_ACT;
-    if (fight_swap) {
-      fr_swap_sides();
-      fr_resolve(fight_them, fight_me);
-      fr_swap_sides();
-    } else
-      fr_resolve(fight_me, fight_them);
-    outcome_show();
-    vs_got_ = 0;
-  }
-  (void)dt;
-  return FIGHT_GOING;
-}
-
-/* ---- for the boss screen: drawing and setup it shares (numbers only cross the banks) ---- */
-void fui_hand_draw(void) BANKED { hand_draw(); }
-void fui_me_block(void) BANKED { me_block(); }
-void fui_answer_line(void) BANKED { answer_line(); }
-uint8_t fui_live_stance(uint8_t i) BANKED { return live_stance(i); }
-uint8_t fui_fuse_act(void) BANKED { return fuse_act(); }
-uint16_t fui_fuse_product(void) BANKED { return fuse_product(); }
-void fui_face_open(uint8_t f) BANKED { face_open(f); }
-void fui_draw_duel(void) BANKED { draw_duel(); }
-uint8_t fui_arena(void) BANKED { return arena_now(); }
-uint8_t fui_equip(uint8_t k) BANKED { return equip(k); }
-void fui_say(uint8_t intent, uint16_t item) BANKED { say(intent, item); }
-void fui_hp_bar(uint8_t x, uint8_t y, int8_t hp, uint8_t max) BANKED { hp_bar(x, y, hp, max); }
-uint8_t fui_cosm(void) BANKED {
-  cosm_ ^= (uint16_t)DIV_REG << 8;
-  return cosm();
-}
-static void top_bar_any(void) {
-  if (fight_kind == FK_BOSS)
-    fbui_top();
-  else
-    top_bar();
-}
-/* ---- the API crucible.c calls ---- */
-/* A fight with faction f's figure at level (the chapter): f | FIGHT_DUEL for a duel; otherwise its champion (the
- * nemesis when nemesis). A FIGHT session on the link is always the versus. */
-void fight_open(uint8_t f, uint8_t level, uint8_t nemesis) BANKED {
-  fight_dbg = 0;
-  fx_ = 0;
-  tear_t_ = 0;
-  avatar_still = 1; /* a fight's face holds still: a bob split across a DMA put 12 sprites on a line (step 17) */
-  if (link_scene_watching()) {
-    fbui_open_shared();
-    return;
-  } /* pulled into the partner's boss (9.4) */
-  if (link_on && link_started && link_mode == LINK_FIGHT) {
-    versus_open();
+  if (fight_kind == FK_GAUNTLET && r == 1u && fight_gauntlet < 3u) {
+    fight_ui = UI_ROUND;
+    show_t_ = 0;
+    line("ANOTHER COMES", T_CREAM);
+    redraw_all();
     return;
   }
-  if (f & FIGHT_DUEL) {
-    duel_open((uint8_t)(f & 7u), level);
-    return;
-  }
-  fbui_open((uint8_t)(f & 7u), level, nemesis);
+  end_(r == 3u ? 5u : r);
 }
-static uint8_t finish(uint8_t r) { /* the fight is over: palette 4 back */
-  if (r == FIGHT_WON) time_mark_act(); /* a win the minute before an angel minute calls someone in */
-  avatar_bg_end();
+static void intro_draw(void);
+static uint8_t finish(uint8_t r) {
+  crucible_load_font();
+  arrow_(0);
   avatar_still = 0;
   if (fight_kind == FK_BOSS) link_scene_end();
+  if (r == FIGHT_WON) time_mark_act();
   return r;
 }
-/* One frame. Returns FIGHT_GOING, or how it ended (FIGHT_WON / FIGHT_FLED / FIGHT_OVER: the run is lost). */
+
+/* ---- the API crucible.c calls ---- */
+void fight_open(uint8_t f, uint8_t level, uint8_t nemesis) BANKED {
+  fight_dbg = 0;
+  fui_fx = FIGHT_FX_FACE | FIGHT_FX_TEAR;
+  avatar_still = 1;
+  fight_end = 0;
+  fight_round = 0;
+  fight_wins[0] = fight_wins[1] = 0;
+  fight_look = 0;
+  fight_mark = 0xffu;
+  fight_cursor = 0;
+  fight_swap = 0;
+  fs_made_n = 0;
+  fight_turns_seen = 0;
+  fui_gained = 0;
+  intro_k_ = 0;
+  chain_best_ = 0;
+  dealt_ = 0;
+  eye_tool_ = 0xffu;
+  fe_lost = CX_NONE;
+  fo_plan = CX_NONE;
+  win_pos_y = 144u;
+  SCY_REG = 0; /* the toast window off, the encounter's pan over: the fight's rows are its own */
+  scene_draw(SCENE_BENCH);
+  icons_load();
+  fight_t0 = sys_time;
+  fight_ui = UI_INTRO;
+  memset(&cx, 0, sizeof cx);
+  cx.pot = CX_NONE;
+  if (link_scene_watching()) {
+    fight_kind = FK_BOSS;
+    fs_open_shared();
+    intro_draw();
+    fs_face();
+    fight_t0 = sys_time;
+    return;
+  } /* pulled into the partner's boss (9.4) */
+  else if (link_on && link_started && link_mode == LINK_FIGHT) {
+    fight_kind = FK_VERSUS;
+    link_peer(fo_name);
+    fo_name[8] = 0;
+    {
+      uint8_t k = (uint8_t)strlen(fo_name);
+      while (k && fo_name[k - 1u] == ' ') fo_name[--k] = 0;
+    }
+    if (!fo_name[0] || !strcmp(fo_name, "YOU")) strcpy(fo_name, "THEM");
+    fo_faction = 3; /* (a name padded with spaces, or the default YOU: THEM) */
+    strcpy(fui_line, "THE SIGNAL TUNES IN");
+    fui_line_attr = T_CREAM;
+    avatar_make((uint16_t)link_seed, 3);
+  } else {
+    if (flow_gauntlet && (f & FIGHT_DUEL)) {
+      fight_kind = FK_GAUNTLET;
+      fight_gauntlet = 1;
+      flow_gauntlet = 0;
+    } else
+      fight_kind = (f & FIGHT_DUEL) ? FK_DUEL : FK_BOSS;
+    fs_open_story((uint8_t)(f & 7u), level, nemesis, (uint8_t)(fight_kind != FK_BOSS));
+    intro_draw();
+    fs_open_bag();
+    if (!fui_line[0]) {
+      fs_say(SAY_TAUNT, CX_NONE);
+      box_line();
+    }
+    fs_face();
+    fight_t0 = sys_time;
+    return; /* (its face has its moment from here) */
+  }
+  intro_draw();
+}
+/* the entrance: first who comes (its face, its name, its way), then what it brings (its bag on the carousel; a boss's
+ * first forge on the merge row) */
+static const char *const STYLE[6] = {"IT LEARNS YOUR POTS", "ITS POTS CHARGE",    "IT TURNS THE SKY",
+                                     "IT READ YOUR BAG",    "WHAT IT SETS GROWS", "ITS POTS LOCK"};
+static void intro_draw(void) {
+  uint8_t y;
+  const char *w;
+  for (y = 1; y < 18u; y++)
+    if (y < 3u || y == 8u || y >= 14u) row_clear(y);
+  header();
+  fight_look = 0;
+  eye_tool_ = 0xffu;
+  box_top();
+  box_line();
+  if (!intro_k_) {
+    if (fight_kind != FK_VERSUS) { /* who it is: its faction and what kind of fight */
+      char id[21];
+      if (fight_kind == FK_GAUNTLET) {
+        strcpy(id, "DOOR 1: ");
+        id[5] = (char)('0' + fight_gauntlet);
+        strcat(id, fo_name);
+      } else {
+        strcpy(id, fo_name);
+        strcat(id, fight_kind == FK_DUEL ? " DUEL" : fo_nemesis ? " NEMESIS" : " BOSS");
+      }
+      centre_(14, id, T_CREAM);
+    }
+    w = fight_kind == FK_VERSUS     ? "FROM THE OTHER ROOM"
+        : fight_kind == FK_GAUNTLET ? "THREE DOORS. ONE."
+        : fight_kind == FK_BOSS     ? STYLE[fo_faction < 6u ? fo_faction : 0u]
+                                    : "IT WANTS A FIGHT";
+    text_((uint8_t)((20u - strlen(w)) / 2u), 15, w, (uint8_t)strlen(w), T_BRASS);
+    put_(1, 16, UI_A, T_CREAM);
+    text_(2, 16, "GO ON", 5, T_CREAM);
+    if (fight_kind != FK_VERSUS) {
+      text_(13, 16, "SE", 2, T_BRASS);
+      text_(16, 16, "BAG", 3, T_BRASS);
+    }
+    return;
+  }
+  fight_look = 1;
+  fight_cursor = 0;
+  tools_now();
+  tab();
+  name_row();
+  put_(1, 16, UI_A, T_CREAM);
+  text_(2, 16, "FIGHT", 5, T_CREAM);
+  text_(8, 16, "<> THEIR BAG", 12, T_BRASS);
+  foot();
+}
 uint8_t fight_tick(uint8_t pressed, uint8_t dt) BANKED {
   uint8_t r;
-  ticker(dt);
-  if (fight_kind == FK_BOSS) switch (fight_ui) {
-    case UI_INTRO:
-      if (pressed & J_SELECT) {
-        fight_ui = UI_KIT;
-        (void)kit_open(1);
-        return FIGHT_GOING;
-      }
-      if (link_scene_wait()) return FIGHT_GOING; /* the partner is being pulled in (4 s at most) */
-      if ((uint16_t)(sys_time - fight_t0) >= INTRO_FRAMES) fbui_round();
-      return FIGHT_GOING;
-    case UI_PLAN:
-      if (fb_plan_step(b_->hand)) fbui_ready();
-      return FIGHT_GOING; /* a recipe lookup a frame */
-    case UI_CHOOSE: fbui_choose(pressed, dt); return FIGHT_GOING;
-    case UI_SHOW:
-      show_t_ = (uint16_t)(show_t_ + dt);
-      if (show_t_ < SHOW_FRAMES && !(pressed & J_A)) return FIGHT_GOING;
-      if ((fbui_outc & FBO_PHASE) && fbui_nemesis && b_->met < 3u && FB->hp) {
-        fbui_end(3);
-        return FIGHT_GOING;
-      } /* the nemesis flees at its first phase */
-      r = fb_over();
-      if (r) {
-        fbui_end(r);
-        return FIGHT_GOING;
-      }
-      if (fr.turn >= 40u) {
-        fbui_end(2);
-        return FIGHT_GOING;
-      }
-      fbui_round();
-      return FIGHT_GOING;
-    case UI_CHOICE: (void)fbui_choice(pressed); return FIGHT_GOING;
-    }
+  SCY_REG = 0; /* the encounter's pan is over: the fight is the whole screen */
+  if (fight_kind == FK_VERSUS && fight_ui != UI_INTRO && link_synced()) {
+    turn_start();
+    return FIGHT_GOING;
+  } /* the host's state was adopted: the turn again */
   switch (fight_ui) {
   case UI_INTRO:
-    if (fight_kind == FK_VERSUS && !vs_setup_) { /* the partner's kit and face are still crossing */
+    if (fight_kind == FK_VERSUS) {
       r = link_fight_ready();
       if (r == 2u) {
-        status("THE OTHER ROOM IS DIFFERENT", T_BRASS);
+        line("THEIR ROOM DIFFERS", T_CREAM);
         link_end(LINK_LOST);
         return finish(FIGHT_FLED);
       }
       if (link_result()) return finish(FIGHT_FLED);
-      if (r)
-        versus_setup();
-      else
-        return FIGHT_GOING;
-    }
-    if ((pressed & J_SELECT) && fight_kind != FK_VERSUS) {
-      fight_ui = UI_KIT;
-      (void)kit_open(1);
-      return FIGHT_GOING;
-    }
-    if ((uint16_t)(sys_time - fight_t0) >= INTRO_FRAMES) turn_start(); /* a second from the open (the work counts) */
-    return FIGHT_GOING;
-  case UI_KIT:
-    if (!kit_tick(pressed)) return FIGHT_GOING;
-    {
-      uint16_t kit[6];
-      (void)player_kit(kit);
-      fr_side_init(0, kit, 6, fr.s[0].pas, fr.s[0].max, fr.s[0].focus);
-    } /* the edited kit fights */
-    scene_draw(SCENE_RECORDS);
-    draw_duel();
-    if (fight_kind == FK_BOSS) {
-      fbui_top();
-      put_(6, 10, GLYPH('+'), T_CREAM);
-      put_(13, 10, GLYPH('='), T_CREAM);
-      text_(12, 10, " ", 1, T_CREAM);
-    }
-    fight_ui = UI_INTRO;
-    fight_t0 = (uint16_t)(sys_time - INTRO_FRAMES + 10u);
-    return FIGHT_GOING;
-  case UI_CHOOSE:
-    r = choose(pressed, dt);
-    if (r == FIGHT_FLED) {
-      duel_end(3);
-      return FIGHT_GOING;
-    }
-    if (fight_kind == FK_VERSUS) return versus_wait(dt);
-    return FIGHT_GOING;
-  case UI_WAIT: return versus_wait(dt);
-  case UI_SHOW:
-    if (fight_kind == FK_VERSUS) (void)versus_wait(dt);
-    show_t_ = (uint16_t)(show_t_ + dt);
-    if (show_t_ < SHOW_FRAMES && !(pressed & J_A)) return FIGHT_GOING;
-    r = fr_over();
-    if (!r) {
-      turn_start();
-      return FIGHT_GOING;
-    }
-    if (fight_kind == FK_VERSUS) {
-      if (link_fight_over(r)) {
-        versus_setup();
-        fight_ui = UI_INTRO;
+      if (!r) return FIGHT_GOING;
+      if (!intro_k_) {
+        uint8_t g[6];
+        link_partner_genome(g);
+        avatar_make_genome(g);
+        fight_t0 = sys_time;
+        intro_k_ = 1;
+        vs_sides();
+        line("THE SIGNAL HOLDS", T_CREAM);
+        header();
+        box_top();
         return FIGHT_GOING;
       }
-      fight_ui = UI_END;
-      show_t_ = 0;
-      return FIGHT_GOING;
-    } /* best of 3 or 5: the next bout */
-    if (fight_gauntlet && r == 1u && fight_gauntlet < 3u) {
-      doors_open();
+    } else {
+      if (!intro_k_) intro_k_ = 1;
+      if (!fs_ready && fs_prep_step()) box_top();
+    } /* its bag is chosen while you look at it */
+    if ((pressed & J_SELECT) && fight_kind != FK_VERSUS) {
+      fight_ui = UI_KIT;
+      arrow_(0);
+      open_t_ = 3;
+      fui_fx |= FIGHT_FX_NOFACE;
       return FIGHT_GOING;
     }
-    duel_end(r);
-    return FIGHT_GOING;
-  case UI_DOORS:
+    if (fight_kind == FK_BOSS && link_scene_wait()) return FIGHT_GOING;
+    if (intro_k_ == 1u) { /* who comes */
+      if (((uint16_t)(sys_time - fight_t0) >= INTRO_FRAMES || (pressed & J_A)) &&
+          (fs_ready || fight_kind == FK_VERSUS)) {
+        intro_k_ = 2;
+        fight_t0 = sys_time;
+        fui_fx = (uint8_t)((fui_fx & (uint8_t)~FIGHT_FX_FACE) | FIGHT_FX_NOFACE);
+        intro_draw();
+      }
+      return FIGHT_GOING;
+    }
     if (pressed & (J_LEFT | J_RIGHT)) {
-      door_at_ ^= 1u;
+      if (nt_)
+        fight_cursor = (uint8_t)((pressed & J_LEFT) ? (fight_cursor ? fight_cursor - 1u : nt_ - 1u)
+                                                    : (fight_cursor + 1u >= nt_ ? 0u : fight_cursor + 1u));
       sound_play(SFX_MOVE);
-      doors_draw();
-    } else if (pressed & J_A) {
-      sound_play(SFX_SWAP);
-      gauntlet_next();
+      name_row();
+    }
+    if ((uint16_t)(sys_time - fight_t0) >= 360u || (pressed & J_A))
+      round_open(); /* what it brings: until A (6 s at most) */
+    return FIGHT_GOING;
+  case UI_KIT: /* (drawn once the cells under it have cleared: a frame or two) */
+    if (open_t_) {
+      if (!--open_t_) (void)kit_open(1);
+      return FIGHT_GOING;
+    }
+    if (!kit_tick(pressed)) return FIGHT_GOING;
+    scene_draw(SCENE_BENCH);
+    icons_load();
+    fight_ui = UI_INTRO;
+    intro_k_ = 2;
+    fight_t0 = sys_time;
+    if (fight_gauntlet <= 1u) fs_open_bag();
+    intro_draw();
+    return FIGHT_GOING; /* (the bag screen may have changed your pins) */
+  case UI_CHOOSE:
+    arrow_(1);
+    if (fight_kind == FK_BOSS && link_scene_shared()) {
+      if (!link_scene_mine()) {
+        partner_ = 1;
+        fight_ui = UI_WAIT;
+        fight_mark = 0xffu;
+        line("THEY TAKE IT", T_CREAM);
+        hints();
+        return FIGHT_GOING;
+      } /* the watcher's veto */
+      if (ls_nudge != 0xffu) {
+        char t[20], nm[14];
+        uint8_t i = ls_nudge < nt_ ? ls_nudge : 0u;
+        ls_nudge = 0xffu;
+        crucible_get_name(cx_tool(0, tl_[i]), nm);
+        nm[7] = 0;
+        strcpy(t, "THEY POINT: ");
+        strcat(t, nm);
+        line(t, T_CREAM);
+      }
+    }
+    if (fight_cursor != prev_cur_ || fight_mark != prev_mark_ || fight_look != prev_look_) {
+      prev_cur_ = fight_cursor;
+      prev_mark_ = fight_mark;
+      prev_look_ = fight_look;
+    }
+    choose(pressed, dt);
+    if (link_on && fight_kind == FK_VERSUS && link_result()) return finish(FIGHT_FLED);
+    return FIGHT_GOING;
+  case UI_WAIT:
+    arrow_(0);
+    if (partner_) { /* watching the partner answer (9.4): SELECT points at your thing in hand, B held a second takes the turn (once a phase) */
+      if (pressed & J_SELECT) {
+        link_scene_nudge(fight_cursor);
+        sound_play(SFX_MOVE);
+      }
+      if (joypad() & J_B) {
+        if (hold_b_ < 250u) hold_b_ = (uint8_t)(hold_b_ + dt);
+        if (hold_b_ >= FLEE_FRAMES && link_scene_veto()) {
+          partner_ = 0;
+          hold_b_ = 0;
+          fight_ui = UI_CHOOSE;
+          sound_play(SFX_SWAP);
+          line("YOU TAKE IT", T_BRASS);
+          hints();
+          preview();
+          return FIGHT_GOING;
+        }
+      } else
+        hold_b_ = 0;
+    }
+    wait_(dt);
+    if ((pressed & J_SELECT) && !partner_ && !(fight_kind == FK_VERSUS && (link_rule(3) & 32u))) {
+      fight_look ^= 1u;
+      fight_cursor = 0;
+      tools_now();
+      name_row();
+      hints();
+    }
+    if (pressed & (J_LEFT | J_RIGHT)) {
+      if (nt_)
+        fight_cursor = (uint8_t)((pressed & J_LEFT) ? (fight_cursor ? fight_cursor - 1u : nt_ - 1u)
+                                                    : (fight_cursor + 1u >= nt_ ? 0u : fight_cursor + 1u));
+      name_row();
+    }
+    if (link_on && fight_kind == FK_VERSUS && link_result()) return finish(FIGHT_FLED);
+    return FIGHT_GOING;
+  case UI_SHOW:
+    arrow_(0);
+    show_t_ = (uint16_t)(show_t_ + dt);
+    if (show_t_ < SHOW_FRAMES && !(pressed & J_A)) return FIGHT_GOING;
+    if (fight_kind == FK_BOSS && fo_nemesis && fo_b->met < 3u && cx_phase(1) >= 1u && cx.s[1].hp > 0) {
+      fight_end = 3;
+      end_(4);
+      return FIGHT_GOING;
+    } /* the nemesis flees at its first phase */
+    r = cx_over();
+    if (r) {
+      round_over(r);
+      return FIGHT_GOING;
+    }
+    turn_start();
+    return FIGHT_GOING;
+  case UI_ROUND:
+    show_t_ = (uint16_t)(show_t_ + dt);
+    if (show_t_ < 120u && !(pressed & J_A)) return FIGHT_GOING;
+    if (fight_kind == FK_GAUNTLET) {
+      fs_open_gauntlet_next();
+      fui_fx |= FIGHT_FX_FACE;
+      fight_ui = UI_INTRO;
+      intro_k_ = 1;
+      fight_t0 = sys_time;
+      intro_draw();
+      return FIGHT_GOING;
+    }
+    round_open();
+    return FIGHT_GOING;
+  case UI_CHOICE:
+    if (fs_choice(pressed)) {
+      fight_ui = UI_END;
+      show_t_ = 0;
+      end_draw();
     }
     return FIGHT_GOING;
   case UI_END:
+    arrow_(0);
     show_t_ = (uint16_t)(show_t_ + dt);
-    if (show_t_ < 150u && !(pressed & J_A)) return FIGHT_GOING;
-    if (fight_kind == FK_VERSUS) return finish(FIGHT_FLED);
-    if (gained_ || pl.pts) {
-      fight_ui = UI_LEVEL;
-      (void)level_open();
+    if (fight_kind == FK_VERSUS) { /* AGAIN: both ask, a new match; LEAVE: the session ends with this result */
+      if (link_result()) return finish(FIGHT_FLED);
+      if ((pressed & J_A) && show_t_ >= 40u) {
+        link_rematch(1);
+        text_(0, 17, " ", 20, T_CREAM);
+        text_(1, 17, "WAITING FOR THEM", 16, T_BRASS);
+        put_(18, 17, UI_B, T_CREAM);
+      }
+      if ((pressed & J_B) && show_t_ >= 40u) {
+        link_rematch(0);
+        return finish(FIGHT_FLED);
+      }
+      if (link_rematch_go()) {
+        fight_round = 0;
+        fight_wins[0] = fight_wins[1] = 0;
+        fs_made_n = 0;
+        chain_best_ = 0;
+        dealt_ = 0;
+        vs_sides();
+        intro_k_ = 2;
+        {
+          uint8_t y;
+          for (y = 1; y < 18u; y++)
+            if (y < 3u || y == 8u || y == 9u || y >= 14u) row_clear(y);
+        }
+        round_open();
+      }
       return FIGHT_GOING;
     }
-    if (cru_story_state(&core, talk_saga()) != CRU_RUN_ON) return finish(FIGHT_OVER);
-    return finish(end_line_ == 1u ? FIGHT_WON : FIGHT_FLED);
+    if (show_t_ < 150u && !((pressed & J_A) && show_t_ >= 40u))
+      return FIGHT_GOING; /* (an A mashed through the last move does not skip it) */
+    if (pl.pts || fui_gained) {
+      fui_gained = 0;
+      fight_ui = UI_LEVEL;
+      open_t_ = 3;
+      fui_fx |= FIGHT_FX_NOFACE;
+      return FIGHT_GOING;
+    }
+    if (cru_story_state(&core, talk_saga()) != CRU_RUN_ON && story_on) return finish(FIGHT_OVER);
+    return finish(fo_end == 1u ? FIGHT_WON : FIGHT_FLED);
   case UI_LEVEL:
+    if (open_t_) {
+      if (!--open_t_) (void)level_open();
+      return FIGHT_GOING;
+    }
     if (!level_tick(pressed)) return FIGHT_GOING;
     player_save();
-    gained_ = 0;
-    if (cru_story_state(&core, talk_saga()) != CRU_RUN_ON) return finish(FIGHT_OVER);
-    return finish(end_line_ == 1u ? FIGHT_WON : FIGHT_FLED);
+    if (cru_story_state(&core, talk_saga()) != CRU_RUN_ON && story_on) return finish(FIGHT_OVER);
+    return finish(fo_end == 1u ? FIGHT_WON : FIGHT_FLED);
   }
   return FIGHT_GOING;
 }
-/* the four cells crucible.c draws: kind[c], id[c] (CRU_K_*), message = turning cells (bit c), sign = the ? shimmers */
+/* the six cells: the merge row and the carousel */
 void fight_view(crucible_cells *v) BANKED {
-  uint8_t c;
-  fr_cardv k;
-  const fr_side *p = &fr.s[0];
+  uint8_t c, k = fight_look ? 1u : 0u, i;
   for (c = 0; c < CRU_CELLS; c++) {
-    v->kind[c] = 0xffu;
+    v->kind[c] = CRU_K_BLANK;
     v->id[c] = 0;
   }
   v->message = 0;
   v->sign = 0;
-  if (fight_kind == FK_BOSS) {
-    fb_state *b = FB;
-    for (c = 0; c < CRU_CELLS; c++)
-      if (c != CRU_CL && c != CRU_CN) v->kind[c] = CRU_K_EMPTY;
-    if (fight_ui == UI_KIT || fight_ui == UI_LEVEL || fight_ui == UI_INTRO || fight_ui == UI_PLAN) return;
-    if (b->a != CRU_NONE && b->kind != FB_CHARGE) {
-      v->kind[CRU_CA] = CRU_K_ITEM;
-      v->id[CRU_CA] = b->a;
-      v->kind[CRU_CB] = CRU_K_ITEM;
-      v->id[CRU_CB] = b->b;
-    }
-    if ((fight_ui == UI_SHOW || fight_ui == UI_END || fight_ui == UI_CHOICE) && b->atk != CRU_NONE &&
-        b->kind != FB_CHARGE) {
-      v->kind[CRU_CR] = CRU_K_ITEM;
-      v->id[CRU_CR] = b->atk;
-      v->message |= 1u << CRU_CR;
-    } else if (b->kind != FB_CHARGE) {
-      v->kind[CRU_CR] = CRU_K_QUESTION;
-      v->sign = (uint16_t)(b->kind == FB_FEINT || b->veiled ? 1u : (fr.turn & 1u));
-    }
-    if (fight_ui == UI_CHOOSE && fuse_ != 0xffu) {
-      uint16_t id = fuse_product();
-      if (id != CRU_NONE) {
-        v->kind[CRU_CF] = CRU_K_ITEM;
-        v->id[CRU_CF] = id;
-        v->message |= 1u << CRU_CF;
+  if (fight_ui == UI_KIT || fight_ui == UI_LEVEL || (fight_ui == UI_INTRO && intro_k_ < 2u) || fight_ui == UI_END ||
+      fight_ui == UI_CHOICE) {
+    if (fight_ui == UI_END || fight_ui == UI_CHOICE)
+      for (i = 0; i < fs_made_n && i < 3u; i++) {
+        c = (uint8_t)(CRU_CL + made_cell(i));
+        v->kind[c] = CRU_K_ITEM;
+        v->id[c] = fs_made_ids[i];
       }
-      return;
+    if (fight_ui == UI_END || fight_ui == UI_CHOICE) v->message = 1u << CRU_CF;
+    return;
+  }
+  if (fight_ui == UI_INTRO) { /* what it brings */
+    if (fight_kind == FK_BOSS && fo_plan != CX_NONE) {
+      v->kind[CRU_CA] = CRU_K_ITEM;
+      v->id[CRU_CA] = cx_tool(1, CX_X(fo_plan));
+      v->kind[CRU_CB] = fo_faction == FO_GHOST ? CRU_K_QUESTION : CRU_K_ITEM;
+      v->id[CRU_CB] = cx_tool(1, CX_Y(fo_plan));
+      v->kind[CRU_CR] = CRU_K_QUESTION;
     }
-    if (fight_ui == UI_CHOOSE && fight_cursor < p->nhand) {
+    if (nt_) {
+      i = fight_cursor;
       v->kind[CRU_CF] = CRU_K_ITEM;
-      v->id[CRU_CF] = p->kit[p->hand[fight_cursor]];
+      v->id[CRU_CF] = cx_tool(1, tl_[i]);
       v->message |= 1u << CRU_CF;
+      if (nt_ > 1u) {
+        v->kind[CRU_CN] = CRU_K_ITEM;
+        v->id[CRU_CN] = cx_tool(1, tl_[i + 1u >= nt_ ? 0u : i + 1u]);
+      }
+      if (nt_ > 2u) {
+        v->kind[CRU_CL] = CRU_K_ITEM;
+        v->id[CRU_CL] = cx_tool(1, tl_[i ? i - 1u : nt_ - 1u]);
+      }
     }
     return;
   }
-  for (c = 0; c < CRU_CELLS; c++)
-    if (c != CRU_CL && c != CRU_CN) v->kind[c] = CRU_K_BLANK;
-  if (fight_ui == UI_KIT || fight_ui == UI_LEVEL) return;
-  v->kind[CRU_CA] = v->kind[CRU_CB] = v->kind[CRU_CR] = CRU_K_EMPTY; /* the slots: a fuse, your card, theirs */
-  if (fight_ui == UI_INTRO) return;
-  if (fight_ui == UI_CHOOSE && fuse_ != 0xffu) {
-    uint16_t id = fuse_product();
-    v->kind[CRU_CA] = id == CRU_NONE ? CRU_K_TRIED : CRU_K_ITEM;
-    v->id[CRU_CA] = id;
+  v->kind[CRU_CA] = v->kind[CRU_CB] = v->kind[CRU_CR] = CRU_K_EMPTY;
+  if (cx.pot != CX_NONE) {
+    v->kind[CRU_CB] = CRU_K_ITEM;
+    v->id[CRU_CB] = cx.pot;
   }
-  if (fight_ui == UI_SHOW || fight_ui == UI_END) {
-    if (fight_me != 0xffu) {
-      if (fr_last_card(0, &k)) {
+  if (fight_ui == UI_SHOW) {
+    uint8_t ev = cx.ev;
+    if (ev == CX_EV_POUR) {
+      v->kind[CRU_CB] = CRU_K_ITEM;
+      v->id[CRU_CB] = cx.ex;
+    } else if (ev != CX_EV_PASS) {
+      v->kind[CRU_CA] = CRU_K_ITEM;
+      v->id[CRU_CA] = cx.ex;
+      if (pot_was_ != CX_NONE) {
         v->kind[CRU_CB] = CRU_K_ITEM;
-        v->id[CRU_CB] = k.id;
-      } else
+        v->id[CRU_CB] = pot_was_;
+      } else if (ev == CX_EV_FORGE) {
         v->kind[CRU_CB] = CRU_K_EMPTY;
-    }
-    if (fight_them != 0xffu) {
-      if (fr_last_card(1, &k)) {
+      }
+      if (ev == CX_BUILD || ev == CX_HIJACK || ev == CX_EV_FORGE || ev == CX_SPLIT) {
         v->kind[CRU_CR] = CRU_K_ITEM;
-        v->id[CRU_CR] = k.id;
-      } else
-        v->kind[CRU_CR] = CRU_K_EMPTY;
+        v->id[CRU_CR] = cx.er;
+        v->message |= 1u << CRU_CR;
+      } else if (ev == CX_BREAK || ev == CX_MISS)
+        v->kind[CRU_CR] = CRU_K_TRIED;
+      else if (ev == CX_START) {
+        v->kind[CRU_CA] = CRU_K_EMPTY;
+        v->kind[CRU_CB] = CRU_K_ITEM;
+        v->id[CRU_CB] = cx.ex;
+      }
     }
+  } else if (fight_ui == UI_CHOOSE && !fight_look && nt_) {
+    uint16_t x = hand_id();
+    if (cx.pot == CX_NONE && fight_mark != 0xffu) {
+      v->kind[CRU_CA] = CRU_K_ITEM;
+      v->id[CRU_CA] = cx_tool(0, fight_mark);
+      if (fight_mark != tl_[fight_cursor]) {
+        v->kind[CRU_CB] = CRU_K_ITEM;
+        v->id[CRU_CB] = x;
+      }
+    } else {
+      v->kind[CRU_CA] = CRU_K_ITEM;
+      v->id[CRU_CA] = x;
+    }
+    if (pv_kind_ == CX_START)
+      v->kind[CRU_CR] = CRU_K_EMPTY;
+    else if (pv_kind_ == CX_BREAK || pv_kind_ == CX_MISS || (pv_kind_ == CX_EV_FORGE && pv_r_ == CX_NONE))
+      v->kind[CRU_CR] = CRU_K_TRIED;
+    else if (pv_known_ && pv_r_ != CX_NONE) {
+      v->kind[CRU_CR] = CRU_K_ITEM;
+      v->id[CRU_CR] = pv_r_;
+    } else
+      v->kind[CRU_CR] = CRU_K_QUESTION;
   } else if (fight_ui == UI_WAIT) {
     v->kind[CRU_CR] = CRU_K_QUESTION;
     v->sign = 1;
+    if (fight_kind == FK_BOSS && cx.pot == CX_NONE && fo_plan != CX_NONE && CX_X(fo_plan) < cx.s[1].n &&
+        CX_Y(fo_plan) < cx.s[1].n) { /* its telegraphed forge */
+      v->kind[CRU_CA] = CRU_K_ITEM;
+      v->id[CRU_CA] = cx_tool(1, CX_X(fo_plan));
+      v->kind[CRU_CB] = fo_faction == FO_GHOST && cx_phase(1) >= 1u ? CRU_K_QUESTION : CRU_K_ITEM;
+      v->id[CRU_CB] = cx_tool(1, CX_Y(fo_plan));
+      v->sign = 0;
+    }
   }
-  if ((fight_ui == UI_CHOOSE || fight_ui == UI_WAIT) && fight_cursor < p->nhand) {
+  /* the carousel */
+  if (nt_) {
+    i = fight_cursor;
     v->kind[CRU_CF] = CRU_K_ITEM;
-    v->id[CRU_CF] = p->kit[p->hand[fight_cursor]];
+    v->id[CRU_CF] = cx_tool(k, tl_[i]);
     v->message |= 1u << CRU_CF;
+    if (nt_ > 1u) {
+      v->kind[CRU_CN] = CRU_K_ITEM;
+      v->id[CRU_CN] = cx_tool(k, tl_[i + 1u >= nt_ ? 0u : i + 1u]);
+    }
+    if (nt_ > 2u) {
+      v->kind[CRU_CL] = CRU_K_ITEM;
+      v->id[CRU_CL] = cx_tool(k, tl_[i ? i - 1u : nt_ - 1u]);
+    }
   }
-}
-uint16_t fight_attack_a(void) BANKED { return fight_kind == FK_BOSS ? FB->a : CRU_NONE; }
-uint16_t fight_attack_b(void) BANKED { return fight_kind == FK_BOSS ? FB->b : CRU_NONE; }
-uint16_t fight_result(void) BANKED { return fight_kind == FK_BOSS && fight_ui == UI_SHOW ? FB->atk : CRU_NONE; }
-uint16_t fight_answer(void) BANKED {
-  const fr_side *p = &fr.s[0];
-  return fight_cursor < p->nhand ? p->kit[p->hand[fight_cursor]] : CRU_NONE;
 }
 uint8_t fight_fx(void) BANKED {
-  uint8_t f = fx_;
-  if (f & FIGHT_FX_TEAR) tear_t_ = 24u;
-  fx_ = 0;
+  uint8_t f = fui_fx;
+  fui_fx = 0;
   return f;
 }
 uint8_t fight_state(void) BANKED { return fight_ui == UI_SHOW ? FIGHT_SHOW : FIGHT_CUE; }
-uint16_t fight_lost(void) BANKED { return lost_; }
-/* The faction that hates you most, if any hates you (0xff: none). */
+uint16_t fight_lost(void) BANKED { return fe_lost; }
+/* The faction that dislikes you most, if any does (0xff: none). */
 uint8_t fight_rival(void) BANKED {
   crucible_story *s = talk_saga();
   uint8_t f, best = 0xffu;
-  int8_t low = -15;
+  int8_t low = -8;
   for (f = 0; f < CRU_FACTIONS; f++)
     if (s->stand[f] <= low) {
       low = s->stand[f];
@@ -1302,10 +1443,10 @@ uint8_t fight_rival(void) BANKED {
     }
   return best;
 }
-/* the "?" of an attack still charging: a palette that flickers toward the glitch colours */
+/* the "?" while they think: flat steps between two inks (no glow) */
 void fight_shimmer(uint16_t *p) BANKED {
   p[0] = 0x7fffu;
-  p[1] = (uint16_t)(((uint16_t)cosm() << 7) ^ (uint16_t)(cosm() * 37u)) & 0x7fffu;
+  p[1] = (sys_time & 16u) ? (8u | (25u << 5) | (31u << 10)) : (28u | (6u << 5) | (24u << 10));
   p[2] = (8u | (25u << 5) | (31u << 10));
-  p[3] = (28u | (6u << 5) | (24u << 10));
+  p[3] = (9u | (3u << 5) | (18u << 10));
 }

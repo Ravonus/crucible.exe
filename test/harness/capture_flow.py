@@ -70,6 +70,11 @@ FLOW_FIGHT = 2
 # Game Boy hardware registers and OAM.
 LCDC = 0xFF40
 LCDC_OBJ_ENABLE = 0x02
+LCDC_BG_MAP_HIGH = 0x08  # the background uses the map at 0x9C00 instead of 0x9800
+BG_MAP_LOW = 0x9800
+BG_MAP_HIGH = 0x9C00
+BG_MAP_COLUMNS = 32
+TILE_ID_VRAM_BANK = 0  # bank 1 holds the attributes
 SCY = 0xFF42
 OAM = 0xFE00
 OAM_ENTRY_SIZE = 4
@@ -314,8 +319,10 @@ class Game:
         return min(scy, 256 - scy) in HALF_PAN
 
     def row(self, y: int) -> str:
-        """Row y of the background tilemap as text."""
-        tiles = self.pb.tilemap_background[0:SCREEN_COLUMNS, y]
+        """Row y of the background map as text. The tile ids are read from VRAM bank 0 directly: PyBoy's tilemap view
+        follows VBK, so a decode that spans the frame's end would read the attribute bank instead."""
+        base = (BG_MAP_HIGH if self.m[LCDC] & LCDC_BG_MAP_HIGH else BG_MAP_LOW) + y * BG_MAP_COLUMNS
+        tiles = [self.pb.memory[TILE_ID_VRAM_BANK, base + x] for x in range(SCREEN_COLUMNS)]
         return "".join(
             chr(tile - FONT_FIRST_TILE + FONT_FIRST_CHAR) if FONT_FIRST_TILE <= tile < FONT_END_TILE else "~"
             for tile in tiles
@@ -846,10 +853,22 @@ def free_browse(g: Game) -> None:
     stalls = 0
     worst = 0
     for k in range(browse):
+        # A random Story visitor can open a talk mid-browse in free play: leave it, as a player would, first.
+        if g.screen != BENCH:
+            g.settle()
+            g.step(30)
         g.pulse("right" if k % 7 else "down", 2)
         g.step(12)
         start = g.frames
-        loaded = g.until(lambda: g.m[g.addr.focus_load] == FOCUS_LOADED, 1500)
+        loaded = g.until(lambda: g.m[g.addr.focus_load] == FOCUS_LOADED or g.screen != BENCH, 1500)
+        if g.screen != BENCH:
+            # A visitor's talk opened while this focus loaded: leave it, step on, and that focus must finish.
+            g.settle()
+            g.step(30)
+            g.pulse("right", 2)
+            g.step(12)
+            start = g.frames
+            loaded = g.until(lambda: g.m[g.addr.focus_load] == FOCUS_LOADED, 1500)
         worst = max(worst, g.frames - start)
         if not loaded:
             stalls += 1

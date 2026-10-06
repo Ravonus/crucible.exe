@@ -35,12 +35,10 @@ const COMPILE_FLAGS = [
 ];
 
 /** Per-unit waivers. The catalogue accessors take the tables context for host builds; in fixed ROM banks it is
- * unused (85). The other two are real findings whose fixes change the generated code, so they wait for a release
- * that is allowed to move the ROM's bytes: a char loop index compared with a uint8_t length (185) and a ternary that
- * mixes char* and a string literal (196). */
+ * unused (85). The other is a real finding whose fix changes the generated code, so it waits for a release that is
+ * allowed to move the ROM's bytes: a ternary that mixes char* and a string literal (196). */
 const WAIVERS: Readonly<Record<string, readonly string[]>> = {
   crucible_core_tables: ["-Wf--disable-warning", "-Wf85"],
-  crucible_fight: ["-Wf--disable-warning", "-Wf185"],
   crucible_menu: ["-Wf--disable-warning", "-Wf196"],
 };
 

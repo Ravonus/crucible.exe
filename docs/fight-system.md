@@ -1,4 +1,207 @@
-# CRUCIBLE.EXE fight system
+# CRUCIBLE.EXE fight system: THE CRUCIBLE
+
+Status: **as built, 2026-10-05**. THE CRUCIBLE replaces the stance triangle, the 6-card kit, FUSE and the passives
+(sections 0–6 and the fight parts of 9 and 10 below, kept as history). The aim: a fight is the game's own mechanic,
+combining what you have into better things and counters, with a real loop that is fun to play against each other. The
+avatar, progression, saves and co-op rules (sections 7–9.5) still hold, with the changes noted here.
+
+Sources: engine `crucible_crux.c/.h`, AI `crucible_crux_ai.c`, screen and turn `crucible_fight.c`, who comes and what it
+costs `crucible_fight_story.c`, the bag and the level card `crucible_fight_kit.c`, link lockstep `crucible_link_play.c`,
+co-op boss `crucible_link_scene.c`, test hooks `crucible_fight_dbg*.c`. Reference and balance:
+`docs/fight-system/sim/crux.py` (the rules and the AI, integer-exact), `cruxsim.py` and `gauntsim.py` (balance). They
+read the catalogue in `catalogue/`. A host build of the C engine was checked against the reference (below).
+
+## T1. The loop in one page
+
+One **pot** (the crucible) stands between two sides. Each side brings a **bag** of eight things from its own shelf and
+holds **the four** (EARTH WATER FIRE AIR, each usable once a round). Turns alternate; one action a turn:
+
+| action                      | when             | what it does                                                                                                                                                                                                                                                 |
+| --------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **ADD x** onto an empty pot | always           | x stands in it, yours, heat 0 (START)                                                                                                                                                                                                                        |
+| **FORGE x + y**             | the pot is empty | two of yours that make something: the product stands, yours, heat 1                                                                                                                                                                                          |
+| **ADD x** onto your own pot | it is yours      | a real recipe: the product, heat +1 (BUILD); anything else burns x and cools it by 1                                                                                                                                                                         |
+| **POUR**                    | it is yours      | it strikes them for its stars + heat (+1 if it shares a trait with the sky); the pot empties                                                                                                                                                                 |
+| **ADD x** onto their pot    | it is theirs     | a real recipe: **HIJACK** (the product is yours, with their heat +1); x is one of its ingredients: **SPLIT** (it falls apart, you take the other ingredient); x's traits beat its traits with at least its stars: **BREAK** (both gone); else MISS (x burns) |
+| **WAIT**                    | it is theirs     | let it stand                                                                                                                                                                                                                                                 |
+
+An empty pot must be filled; your own pot must be poured or built on (you never sit on it). Stars come from recipe
+depth (0–1: one, 2–3: two, 4–5: three, 6+: four); heat caps at 4. A side hits 0 HP and the round is over; at 40
+turns the higher HP wins. The side that opens a round starts with 2 HP more (the opener was otherwise behind: 36%).
+
+**Category rules** come from the category byte, no new tables:
+
+| category | rule                                                                                         | why it matters                                   |
+| -------- | -------------------------------------------------------------------------------------------- | ------------------------------------------------ |
+| PLACE    | **locked**: nothing is added onto it (no hijack, no split) and it never heats                | safe but cold: break it or take the pour         |
+| LIFE     | **grows**: +1 heat at its owner's every turn                                                 | leave it standing and it gets worse              |
+| WEATHER  | is **the sky**: a weather pot sets it; every pour that shares a trait with it +1, both sides | change the sky to your bag's traits              |
+| ELEMENT  | **open**: everyone holds the four                                                            | the four are the universal hijack and split keys |
+
+**Why it is fun.** Every turn is the bench, against someone. Building a big pot means leaving it standing for one of
+their turns, and they can take it with one of their things. Hijacking their best pot pours their own heat at them.
+Baiting with something they can only hijack into a thing you can take back is the best feeling in the game. The
+more recipes you know, the more you see: the = cell shows the product only for pairs you have made, and the eye
+shows which of their things could take what you are about to leave standing. Push your luck: pour now for less, or
+build one more step and risk it.
+
+**Reads.** Bags and the four are public (SELECT shows their bag; FOG hides it in versus). Hijack chains run up to 6
+deep between skilled players.
+
+## T2. The screen (160×144, the bench's own layout)
+
+```
+row 0     12 #####  ..  .. ####- 07          you | round pips | them; bars in half steps, no glow
+rows 1-2  DAEMON   BAG 6  <;>[               who, their bag size, their four (spent ones gone)
+          HIJACK +$ ^AIR                     what the thing in hand does; ^ the eye: what of theirs could take it
+rows 4-7  [yours] + [the pot] = [it makes]   the bench's merge row; ? an unknown pair, x it burns or breaks
+row 8        KAI 14105 @                        the pot's tab: whose, heat ($), lock (&), grows, sky (@), charge
+rows 10-13 < [ ] [ focus ] [ ] >             your bag and four on the bench carousel (SELECT: theirs)
+row 15        SAND **                        name and stars
+row 16    A ADD  B WAIT   SE BAG             buttons (they follow the pot: MARK/FORGE/UNDO, BUILD/POUR)
+row 17    YOURS <;>[              ....       your four, the turn's pips
+```
+
+Buttons: LEFT/RIGHT your things; A adds the thing in hand (an empty pot: A marks it, A on a second forges the two, A
+on the same one sets it alone); B waits on their pot, pours yours, unmarks; SELECT looks at their bag; hold B a second
+on an empty pot in a duel: flee. A turn has 4 pips (+FOCUS) of 2.5 s; out of time, your pot pours, theirs stands, an
+empty one takes your first thing. Every move shows on the merge row with the merge's own tear; hits wash white (you)
+or jolt (them); the opponent's face shows in the intro and at the end, never over the merge row. The icons (flame,
+lock, cloud, sprout, eye, bolt, the four, HP steps, star) are twelve punctuation glyphs swapped in for the fight and
+restored after (flat one-colour, KEEL style).
+
+**Entrance** (story duels and bosses): the bench draws at once with their face, NAME, faction and a style line (what
+their twist does: "ITS POTS CHARGE", "IT TURNS THE SKY", "ITS POTS LOCK" ...); A (once their bag is packed, a few
+frames, sliced so the screen never stalls) shows their bag on the carousel and, for a boss, its first telegraph (what
+it means to forge next) on the merge row; A or a few seconds opens round 1.
+
+**End screen** (every fight): big two-tile-high YOU WIN / <NAME> WINS / YOU RAN / NEITHER FALLS, MADE IN THE FIGHT
+with the actual sprites on the carousel cells and NEW tags (or NOTHING NEW MADE), the score or what was taken (versus
+"ROUNDS 2 TO 1"; a boss "LOST: X" / after the choice "TOOK: X" or "UNMADE: X"), the key stat (POURED n CHAIN n), and
+the buttons: versus A AGAIN (both ask: a new match on the same cable) / B LEAVE (the result screen); story A OK. The
+bench is redrawn whole after every end (win, loss, flee, cable pull, gauntlet door); `test/harness/capture_crux.py` compares the
+frame after each against a clean bench render. Every fight string fits 20 columns; the pot's tab fits 8-letter names; a move's line drops to a short prefix (TAKEN:,
+TOOK:, MADE:) when a long name would not fit, and the eye line drops its verb.
+
+## T3. The bag
+
+Six **pins** per save (the bag screen: SELECT on the bench's filter screen, START: TO BAG; or SELECT in a fight's
+intro), then the **auto bag**: what you own of two stars, then one, each by how often you used it on the bench, at most
+two of a category, ties to the lower id (the best 40 candidates are kept while walking the shelf). Three stars only
+pinned, REACH of them; four stars never. Attributes: GRIT +1 HP, FOCUS +1 pip a turn, REACH one more three-star pin
+(the save's `pl.kit` and `pl.equip` bytes keep their places: old saves load unchanged).
+
+## T4. Story
+
+- **When.** No fight until there is a bag (twelve things owned). The first fight is always a duel (the first
+  contact: a figure that does not plan and knows little, 6 HP); ten makes after it the first champion comes (the
+  nemesis' first meeting). Chapter gatekeepers fight from chapter 1 (owed, not turned into a talk, while there is no
+  bag). Hostile champions from standing -30 (was -50), rivals and duelists from -8 (was -15: honest play never got
+  there). Talks cost 3 lucid (was 6), a chapter 4 + 2·pressure (was 6 + 4·pressure), a lost duel 4 (8), a lost boss 6
+  (12). The merge's random arrivals (18–44 s of bench time) still bring optional champions.
+- **Duels.** A faction's figure: its favourites (its category, liked traits, within the tier's depth, walked from a
+  seeded start, each followed by the shallow ingredients of its first recipe so it has things to forge). The AI plays
+  the baiter with chance skill/256, else greedy, and plans only with the recipes it knows (a seeded hash: know/256 of
+  them). A duel never takes your things.
+- **Bosses.** The same, plus its faction's **twist**, its **telegraph** (the box shows NEXT a + b = ?: the forge of
+  its own it knows that makes the most stars; it plays it on its next empty pot) and **phases** at 2/3 and 1/3 of its
+  HP (the twists step up; the tab and the box say so):
+
+| faction         | twist                                                                                        | tell                   | counter                         |
+| --------------- | -------------------------------------------------------------------------------------------- | ---------------------- | ------------------------------- |
+| PROGRAM (craft) | from phase 2 a pot you start teaches it a partner for it (COMPILE)                           | its bag grows          | stop starting the same things   |
+| DAEMON (energy) | CHARGE: its own pot heats +1 at its turn, +2 from phase 2                                    | the bolt on its tab    | take or break its pots at once  |
+| GHOST (weather) | every pot it makes sets the sky                                                              | the cloud on every tab | play into its sky, or change it |
+| AI (matter)     | WATCH: it brings partners for two of your bag                                                | the eye in the box     | bring the bag it did not read   |
+| OPERATOR (life) | ROOT: from phase 1 its pot you let stand seeds back into its bag; from phase 2 its pots grow | the sprout             | never WAIT on its pots          |
+| RELIC (place)   | LOCK: from phase 2 its pots are locked to you, and its pours shield it (your next pour -1)   | the lock               | break, and pour first           |
+
+- **Tiers** (chapter 0–1 T1, 2–3 T2 … the finale T5, every later cycle T6): HP 7/10/11/9/10/11, bag 6/6/7/6/8/8,
+  depth 3/3/3/4/4/4, skill 0/60/140/60/130/180, knowledge 115/128/170/135/165/190 (of 256). RELIC and OPERATOR -1 HP;
+  a returning nemesis +2. Simulated first tries for a typical player (half baiter, knows half the recipes, HP 12):
+  **88 / 84 / 70 / 63 / 41 / 32%**; a strong one (baiter, two-thirds known) 96 / 93 / 89 / 72 / 60 / 50%.
+- **Gauntlet** (chapter 4 and the finale): three figures two tiers down (never below T1); your HP carries with 3 more
+  at each door, the bag and the four come back fresh (a carried bag runs dry: nobody got through). Simulated typical
+  player (`gauntsim.py`, 400 runs) at chapter 4: 71% (+2: 66%, +4: 74%; one tier down with +4 was 56%). The ROM bot
+  (a PyBoy test: a story at chapter 4, about 40 makes, the cartridge's own AI at 60% skill choosing your moves,
+  real input) cleared 33 of 50 (66%); with +2 it was 14 of 30, with +4 30 of 40.
+- **The nemesis** flees at its first phase in its first two meetings (as before) and returns stronger.
+- **Rewards and costs** as section 7.1/7.2 (XP, standings, lucid, the TAKE / LET GO / UNMAKE choice). New: what you
+  made in a fight (forged, built or hijacked, new to you; up to three) is yours, a discovery.
+
+## T5. Link versus (lockstep) and the co-op boss
+
+- **Setup** (re-sent until both hold all of it): each side's bag (`P_DECK` ×4, two ids each), face and level
+  (`P_AVATAR` ×2), catalogue size (`P_CAT`), and its seed, cell and bag size (`P_PAS`). A different catalogue: "the
+  other room is different". The side that holds everything says so (`P_PAS` bit 7) eight more times, 1.5 s apart, so
+  a lost reply never leaves the partner waiting in its entrance.
+- **Turns.** Only the side to move sends: `P_FTURN` a = word lo | (turn | round<<6)<<8, b = state hash | word hi<<8. It
+  is re-sent every half second until the partner's ack (b bit 14); the partner acks every copy. The guest runs the
+  engine swapped (its player is side 0) and hashes in the host's order. A hash that differs: the host's whole state
+  crosses as `P_FSYNC` chunks and the turn starts again from it; each snapshot carries a 2-bit epoch in the chunk
+  index and the guest's ask a 2-bit number: the guest collects one epoch only and never applies one twice; a new ask
+  number takes a fresh snapshot, a repeated one (a chunk missing; the guest asks every two seconds until it is whole)
+  re-sends the same snapshot, so a lost chunk no longer stalls the match and a late copy never rolls a cart back; the
+  stream goes out whenever the queue has room (waiting for an idle line starved it behind the turn's re-sends). After a match both see the end screen: AGAIN
+  on both (`P_READY` 0xfe, b=1, re-sent) starts the next match on the same cable (the opener alternates); LEAVE (b=2)
+  ends the session on the result card: the end screen's frame (the bench band, the pixel title YOU WIN / THEY WIN /
+  NEITHER FALLS / NO CONTEST). A partner still named YOU reads THEY WIN and, in the lobby, LINK HOST / GUEST (the
+  cable row; SEARCHING while it looks). Their bag count stays blank until it is known.
+- **Rules** (the host's lobby, `P_RULES`/`P_RULES2` unchanged on the wire): ATTRS (normal/capped/full GRIT), BEST OF
+  1/3/5, PIPS 6/4/3/2, HP, and three toggles: RANDOM bags, FOG (their bag hidden), MIRROR (both bring the host's).
+  Presets FAIR, STRENGTH, CHAOS (capped, random, fog), CUSTOM. The rounds alternate who opens.
+- **Co-op boss** (9.4): the owner's words carry the seed, faction, tier, its bag, its HP, the boss's HP and who opens;
+  both carts run the same engine; who answers each of your turns comes from the seed (never three in a row); the
+  watcher's SELECT points, holding B takes the turn once a phase; a cut cable leaves each finishing alone. The
+  watcher packs the boss's bag during its entrance (not before the screen opens); an answer that arrives before the
+  round opens on the watcher is kept; setup chunks that come before the cue count. The link's receive ring is 64 bytes
+  (a reveal's slow frames overflowed 32 and lost setup chunks).
+
+## T6. Balance (cruxsim.py, the live slice: 5,629 objects, 13,439 recipes)
+
+Versus, row win % (auto bags, players knowing 60% of recipes, 240 bouts a cell). random: any move it knows of;
+greedy and baiter: the cartridge's AI at skill 0 and 256; reader: three plies (its move, their best answer, its best
+follow-up), a strong human.
+
+|        | random | greedy | baiter | reader | field |
+| ------ | ------ | ------ | ------ | ------ | ----- |
+| random | 49     | 51     | 30     | 35     | 41    |
+| greedy | 62     | 54     | 39     | 42     | 49    |
+| baiter | 76     | 73     | 61     | 54     | 66    |
+| reader | 75     | 66     | 59     | 52     | 63    |
+
+- Skill beats random (74–76%); between the two skilled styles neither dominates (54–59% either way: seat and seed
+  noise). The field figure is above 60% only because it includes the weak players.
+- The opener (with its +2 HP) wins 45% of decided bouts (+3: 47%, +4: 51%); best-of rounds alternate who opens.
+- A round lasts about 22 turns (1½–2½ minutes). Per round between skilled players: 3.4 hijacks, 3.4 forges, 4.5 pours,
+  1.9 breaks, 0.5 splits; the longest hijack chain is 2+ in half the rounds, up to 5.
+
+- Bags against the default auto bag (reader mirror): auto 55 (seat noise), random 39, all two-star 49, all one-star 13,
+  PLACE-heavy 56, LIFE 40, WEATHER 34, CRAFT 49, MATTER 33, ENERGY 32: no bag style beats the default by more than 56%.
+- Knowledge pays: a player knowing 90% of recipes beats one knowing 30% 89% of the time, 60% vs 30% 70%, 90% vs 60% 71%.
+- Shelf size matters little: 300 things against 60, 59%; 300 against 150, 50%.
+
+## T7. Verification (ROM 098e9190)
+
+- Engine and AI: the C built for the host matches crux.py on 300 golden bouts (about 6,250 turns); the ROM replays
+  120 of them word for word and hash for hash (3/3 golden runs).
+- Link: `test/harness/capture_link.py` 70/70: co-op, race, draw, lost cable; the versus (every move identical on both carts;
+  START/FORGE/HIJACK/SPLIT/BREAK/POUR/WAIT over the cable, a hijack chain, PLACE/LIFE/WEATHER pots, best of 3); the end
+  screen on both (big result mirrored, MADE IN THE FIGHT, ROUNDS 2 TO 1 / 1 TO 2, AGAIN / LEAVE); AGAIN on both starts
+  a rematch that plays through identically; LEAVE on both gives mirrored results; a pulled cable gives NO CONTEST; both
+  saves reboot; the versus on a noisy wire (1% of bytes flipped, 0..6 frames of delay, a forced desync resynced from the
+  host) to its end screen, at eight noise seeds. Co-op boss: 6/6.
+- Story: `test/harness/capture_crux.py` 26/26 (a duel, a fled duel, a boss and a gauntlet with real input: the entrance names it
+  and its kind, then its bag and the boss's first telegraph; the end screen; the bench after each fight is the bench
+  before it, map, attributes and font, 0 cells differ); `test/harness/capture_flow.py` 190/190 (browse: 0 stalls); `test/harness/capture_discoveries.py`:
+  24 objects captured; the gauntlet bot 33/50 at chapter 4 (T4). Pacing (previous round, unchanged): first boss at make 16-28, median
+  7.2 min at bot pace.
+- Old saves from aa380af0, 9193a780 and c02279c0 load (4/4 each). The engine (crucible_crux.c) did not change this
+  round, so its host tests were not rerun.
+
+---
+
+# History: the stance-triangle design (2026-10-04, replaced)
 
 Status: design spec, 2026-10-04. Sources it builds on: `crucible_fight.c/.h`, `crucible_link.c/.h`,
 `crucible_storyrun.*`, `crucible_avatar*.c`, `crucible_feats.c`, `crucible_sound.c` (`cartridge/src`),

@@ -9,7 +9,7 @@ A Game Boy Color cartridge about a bench in a room that should not be there. You
 each other, lose their edges, and become a third thing you did not have before. Nobody tells you why you are here. The
 clock asks what time it is. Someone is waiting just above the screen.
 
-![Title card, the bench, a first discovery, a living room, a visitor and a fight](docs/images/screens.png)
+![Title card, the bench, a first discovery, a living room, a duel and a boss in THE CRUCIBLE](docs/images/screens.png)
 
 `release/crucible.exe.gbc` is the cartridge: 8 MB, MBC5 with 128 KB battery-backed RAM, Game Boy Color only. It runs
 in any accurate CGB emulator and on hardware from a flash cart.
@@ -17,8 +17,8 @@ in any accurate CGB emulator and on hardware from a flash cart.
 ## What is in the cartridge
 
 - **5,629 things and 13,439 ways to make them**, from earth, water, fire and air outward. Every object is drawn from
-  its own 3D construction, with eight resting poses and a twelve-view turntable, and a second layer of material
-  colour drawn as sprites over the background.
+  its own 3D construction, with eight resting poses and a twelve-view turntable, and every object has a second layer
+  of material colour drawn as sprites over the background.
 - **The bench.** Pick two, watch their real sprites stretch toward each other and fuse, then see what came out, already
   turning. A new discovery is worth points; a pair that makes nothing is remembered as tried, never as impossible.
 - **The book**, filters by type and by trait (hot, cold, wet, shiny, alive, magic...), titles earned from what you make,
@@ -36,7 +36,9 @@ in any accurate CGB emulator and on hardware from a flash cart.
   keeps a sky with the moon's phase, notices when
   you have been away, and something stirs at the angel minutes (1:11, 3:33, 11:11...).
 - **Lost pieces.** Something you lose cools down before it can be made again, and the bench glitches when you try.
-- **Fights**: bosses that telegraph their moves, duels, a kit built from what you have made, and a face of your own.
+- **THE CRUCIBLE**: fights are the game's own mechanic. You and your opponent pour, forge and hijack things into a
+  shared pot, chain combinations and break each other's makes. Duels, bosses that telegraph their moves, gauntlets,
+  and a face of your own; best of three against a friend over the link cable.
 - **Link cable play** for two (below).
 - A chip-groove soundtrack (the trailer's, live on the cartridge), secrets, and a few doors that are not doors.
 
@@ -115,7 +117,7 @@ and memory say, and write a screenshot at every step:
 .venv/bin/python test/harness/capture_discoveries.py build/crucible.gbc out/discoveries   # reveals turn and colour
 .venv/bin/python test/harness/capture_overlay.py build/crucible.gbc out/overlay           # the material layer
 .venv/bin/python test/harness/capture_lost_piece.py build/crucible.gbc out/lost           # a lost piece's cooldown
-.venv/bin/python test/harness/capture_fight.py build/crucible.gbc out/fight               # a story fight
+.venv/bin/python test/harness/capture_crux.py build/crucible.gbc out/crux                 # story fights: duel, boss, gauntlet
 ```
 
 They read symbols from `build/crucible.noi` and the listings in `build/obj`, so run them on a build from this tree.

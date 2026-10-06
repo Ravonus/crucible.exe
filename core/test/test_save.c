@@ -78,6 +78,32 @@ static void copy_store(mem_store *to, const mem_store *from) {
   to->writes = 0;
 }
 
+/* cru_mix_finish_later + cru_save_step a few bytes at a time leaves the same SRAM and state as cru_mix_finish; a mix
+ * started mid-save (or a flush) finishes it first */
+static void save_over_frames(void) {
+  static crucible_core x, y;
+  static mem_store mx, my;
+  const char *pairs[][2] = {{"WATER", "FIRE"}, {"AIR", "EARTH"},   {"WATER", "WATER"},
+                            {"FIRE", "FIRE"},  {"EARTH", "WATER"}, {"AIR", "FIRE"}};
+  unsigned i, steps;
+  boot_clean(&x, &mx, CRU_PLACE_128K);
+  boot_clean(&y, &my, CRU_PLACE_128K);
+  for (i = 0; i < 6u; i++) {
+    uint16_t a = id_of(pairs[i][0]), b = id_of(pairs[i][1]);
+    cru_mix_begin(&x, a, b, 0x3c);
+    cru_mix_begin(&y, a, b, 0x3c);
+    EQ(cru_mix_finish(&x), cru_mix_finish_later(&y));
+    steps = 0;
+    if (i & 1u)
+      while (cru_save_step(&y, 7u)) steps++; /* odd mixes: stepped to the end; even: the next mix finishes it */
+    if (i & 1u) CHECK(steps > 20u);
+  }
+  cru_save_flush(&y);
+  CHECK(!memcmp(mx.mem, my.mem, IMAGE));
+  EQ(x.points, y.points);
+  EQ(x.made, y.made);
+  EQ(x.sequence, y.sequence);
+}
 static void round_trip(void) {
   crucible_core c, d;
   snap_t x, y;
@@ -587,6 +613,7 @@ static void torn_record_fallback(void) {
 
 void save_tests(void) {
   printf("save\n");
+  RUN(save_over_frames);
   RUN(round_trip);
   RUN(torn_writes);
   RUN(torn_rotation);

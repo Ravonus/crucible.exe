@@ -18,7 +18,7 @@
 #include "crucible_state.h"
 #include "crucible_avatar.h"
 #include "crucible_player.h"
-#include "crucible_fight_rules.h"
+#include "crucible_crux.h"
 #define T_CREAM 7u
 #define T_BRASS 15u
 #define R0 8u /* the existing cosmetic rows stay in place */

@@ -186,7 +186,7 @@ uint8_t story_after_mix(uint16_t a, uint16_t b, uint8_t made) BANKED {
   if (made) {
     uint8_t f;
     for (f = 0; f < CRU_FACTIONS; f++)
-      if (s->stand[f] <= -50) break;
+      if (s->stand[f] <= -30) break;
     if (f < CRU_FACTIONS && !(DIV_REG & 3u)) return STORY_BOSS;
   }
   /* now and then someone steps in while you work (more often the deeper it goes) */

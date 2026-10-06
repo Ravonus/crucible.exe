@@ -1,12 +1,11 @@
-/* The debug mailbox, continued (crucible_fight_dbg.c): the avatar, the player record and the link harness's commands.
+/* The debug mailbox, continued (crucible_fight_dbg.c): commands 7..13, the avatar, the player record and the link harness.
  * Inert unless a test harness writes fight_dbg. */
 #pragma bank 255
 #include <gb/gb.h>
 #include <string.h>
 #include "crucible_state.h"
-#include "crucible_fight_rules.h"
+#include "crucible_crux.h"
 #include "crucible_fight.h"
-#include "crucible_fight_boss.h"
 #include "crucible_avatar.h"
 #include "crucible_player.h"
 #include "crucible_link.h"

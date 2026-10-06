@@ -477,7 +477,7 @@ static void open_(uint16_t seed, uint8_t sector, uint8_t egg) {
     speed_ = (uint8_t)((tq_base_ + 3u) >> 2);
     if (w) pitch_ = (uint8_t)((pitch_ + (roll() & 1u)) & 3u);
   } /* a little of their own */
-  cru_story_lucid(&saga_, -6); /* each conversation goes a little deeper */
+  cru_story_lucid(&saga_, -3); /* each conversation goes a little deeper (3: a run lasts past its first boss) */
   if (egg == 0xffu && !ending_ && dialogue_cadence(&saga_)) {
     if (saga_.chapter < CRU_STORY_CHAPTERS - 1u) cru_story_advance(&core, &saga_);
   } /* every few conversations, deeper: a new chapter */

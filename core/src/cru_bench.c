@@ -98,12 +98,14 @@ static uint8_t begin(crucible_core *c, uint16_t a, uint16_t b, uint8_t entropy) 
   return m->outcome;
 }
 uint8_t cru_mix_begin(crucible_core *c, uint16_t a, uint16_t b, uint8_t entropy) CORE_BANKED {
+  cri_save_flush(c);
   return begin(c, a, b, entropy);
 }
 
-uint8_t cru_mix_finish(crucible_core *c) CORE_BANKED {
+static uint8_t finish(crucible_core *c, uint8_t later) {
   crucible_mix *m = &c->mix;
   uint8_t is_new, before;
+  cri_save_flush(c);
   if (!m->open) return 0;
   m->open = 0;
   if (m->lost) {
@@ -136,8 +138,12 @@ uint8_t cru_mix_finish(crucible_core *c) CORE_BANKED {
   cri_feats_mix(c, m->a, m->b, m->result, is_new, m->fresh);
   m->toasts = (uint8_t)(c->toast_n - before);
   if (m->outcome != CRU_NOTHING) cri_lost_combo(c); /* something was made: lost pieces cool one mix more */
-  cri_save(c); /* the record carries the staged journal */
-  cri_play_commit(c); /* then the areas change */
+  if (later)
+    cri_save_begin(c, 1u); /* the record over frames; the areas change once it is whole */
+  else {
+    cri_save(c); /* the record carries the staged journal */
+    cri_play_commit(c);
+  } /* then the areas change */
   /* on the bench a known or empty pair resolves where it stands: slot A stays, the second pick takes focus */
   if (c->slot_b != CRU_NONE && (m->outcome == CRU_KNOWN || m->outcome == CRU_NOTHING)) {
     c->focus = c->slot_b;
@@ -149,6 +155,8 @@ uint8_t cru_mix_finish(crucible_core *c) CORE_BANKED {
   }
   return m->awarded;
 }
+uint8_t cru_mix_finish(crucible_core *c) CORE_BANKED { return finish(c, 0); }
+uint8_t cru_mix_finish_later(crucible_core *c) CORE_BANKED { return finish(c, 1u); }
 
 /* ---- the bench ---- */
 uint8_t cru_bench_move(crucible_core *c, uint8_t dir) CORE_BANKED {

@@ -1,15 +1,15 @@
-/* Link play over crucible_link.c's packets (docs/fight-system.md 9): the versus fight in lockstep. Saves stay
- * separate; only inputs and each player's own setup cross the cable, and every protocol here survives per-byte delays
- * (a cable bridged over the network moves a byte every 100-200 ms at worst): everything that matters is re-sent until
- * the partner says it arrived, nothing assumes timing, and silence ends a session only after 8 s (crucible_link.c).
+/* Link play over crucible_link.c's packets: THE CRUCIBLE in lockstep (docs/fight-system.md). Saves stay
+ * separate; only each player's setup and the action words cross the cable. Every protocol here survives per-byte
+ * delays (a cable bridged over the network moves a byte every 100-200 ms at worst): what matters is re-sent until the
+ * partner says it arrived, nothing assumes timing, and silence ends a session only after 8 s (crucible_link.c).
  *
- * Versus setup: each side sends its kit (P_DECK x3), its face and level (P_AVATAR x2), its passives, cell and seed
- * (P_PAS) and its catalogue size (P_CAT), again every 1.5 s until it holds the partner's whole setup and the partner's
- * P_PAS says it holds ours. The session seed mixes both seeds and both alignment cells, symmetric because host and guest
- * are fixed. Each turn: P_FTURN (action, turn, the state hash before it, the lock pip, and an ack bit: "I hold your
- * turn"), re-sent every half second until acked; a partner still on the previous turn gets that one again. A hash that
- * differs: the guest asks (P_FSYNC 0xff) and the host sends its whole engine state as P_FSYNC chunks; the guest adopts
- * it. The ticker tears, nothing more. */
+ * Setup: each side sends its bag (P_DECK x4: two ids each), its face and level (P_AVATAR x2), its catalogue size
+ * (P_CAT) and its seed, cell and bag size (P_PAS), again every 1.5 s until it holds the partner's whole setup and the
+ * partner's P_PAS says it holds ours. The session seed mixes both seeds and both alignment cells, symmetric because
+ * host and guest are fixed. Turns alternate: the side to move sends P_FTURN (its word, the turn and the round, the
+ * state hash before the move), re-sent every half second until the partner's ack for that turn comes back; the partner
+ * acks every copy it gets. A hash that differs: the host's state wins (P_FSYNC chunks), and the turn starts again from
+ * it. Both carts run the engine in the host's side order for the hash; the guest's screen swaps to see itself. */
 #pragma bank 255
 #include <gb/gb.h>
 #include <string.h>
@@ -17,31 +17,27 @@
 #include "crucible_state.h"
 #include "crucible_link.h"
 #include "crucible_fight.h"
-#include "crucible_fight_rules.h"
+#include "crucible_fight_int.h"
 #include "crucible_player.h"
 #include "crucible_storyrun.h"
 #define RESEND_SETUP 90u
-#define SETUP_GAP 6u /* frames between the setup's packets (each only on an idle line) */
+#define SETUP_GAP 6u
 #define RESEND_TURN 30u
-uint8_t link_send(uint8_t type, uint16_t a, uint16_t b) BANKED; /* crucible_link.c: 1 queued, 0 the queue was full */
+uint8_t link_send(uint8_t type, uint16_t a, uint16_t b) BANKED;
+uint8_t cri_depth(crucible_core *c, uint16_t id) BANKED;
 
-/* ---- state (globals: the link harness reads them) ---- */
-uint8_t lp_ready, lp_have, lp_they_have, lp_sync_n, lp_desyncs, lp_resends, lp_wins[2], lp_bout;
-/* the partner's setup waits in the fight engine's scratch (no AI runs during a link session; the resync uses it only
- * after the setup was read) */
-#define their_kit_ ((uint16_t *)fr_scratch)
-#define their_g_ (fr_scratch + 12)
-static uint16_t their_seed_, my_seed_, setup_t_;
-static uint8_t their_pas_[2], their_level_, their_attrs_, their_cell_, cat_ok_ = 1;
-/* the turn in flight: mine (current and previous), theirs */
-/* the partner's turns in two slots by the turn's parity: a partner a turn ahead never overwrites the turn we still need */
-static uint8_t my_act_[2], my_turn_[2], my_hash_[2], my_pip_, have_theirs_, their_act_[2], their_turn_[2],
-    their_hash_[2], their_pip_[2], acked_, turn_t_;
-static uint8_t fturn_in_; /* bit k: slot k holds a turn */
-#define SETUP_ALL 0x7fu
-#define SYNC_CHUNKS 26u
-static uint8_t sync_k_ = 0xffu, sync_got_[4], ask_t_;
-static const uint8_t BIT8[8] = {1, 2, 4, 8, 16, 32, 64, 128}; /* deck 0..2, avatar 0..1, pas, cat */
+uint8_t lp_ready, lp_have, lp_they_have, lp_sync_n, lp_desyncs, lp_resends, lp_wins[2], lp_bout, lp_synced, lp_match,
+    lp_result, lp_again[2], lp_left;
+static uint8_t again_t_;
+static uint16_t their_bag_[8], my_bag_[8], their_seed_, my_seed_, setup_t_;
+static uint8_t their_g_[6], their_n_, my_n_, their_level_, their_attrs_, their_cell_, cat_ok_ = 1, setup_k_;
+static uint16_t my_word_, their_word_[2];
+static uint8_t my_key_ = 0xffu, my_hash_, acked_, turn_t_, their_key_[2], their_hash_[2], in_;
+#define SETUP_ALL 0xffu
+static const uint8_t BIT8[8] = {1, 2, 4, 8, 16, 32, 64, 128};
+static uint8_t key_(uint8_t turn) {
+  return (uint8_t)((turn & 63u) | (((fight_round + lp_match) & 3u) << 6));
+} /* (a rematch shifts the rounds' tag: a stale copy of the last match's move is never this one) */
 static uint8_t my_cell(void) {
   if (!story_on) return 4u;
   {
@@ -50,49 +46,44 @@ static uint8_t my_cell(void) {
     return (uint8_t)((o >= 12 ? 0u : o <= -12 ? 2u : 1u) * 3u + (h >= 12 ? 0u : h <= -12 ? 2u : 1u));
   }
 }
-static void kit_now(uint16_t *kit, uint8_t *pas) {
-  (void)player_kit(kit);
-  if (link_rule(3) &
-      8u) { /* random kits: a seeded walk along your own shelf (fitted to the budget, else the auto-kit) */
-    uint16_t r = (uint16_t)(my_seed_ ^ link_seed), id = 0;
-    uint8_t k, n;
-    for (k = 0; k < 6u; k++) {
-      r ^= (uint16_t)(r << 7);
-      r ^= (uint16_t)(r >> 9);
-      r ^= (uint16_t)(r << 8);
-      for (n = (uint8_t)(1u + (r & 7u)); n; n--) id = player_owned_next(id);
-      kit[k] = id;
+/* the bag this side brings: its own (pinned and auto), or RANDOM: eight of two stars or less from a seeded place on
+ * its own shelf */
+static void bag_now(void) {
+  if (link_rule(3) & 8u) {
+    uint16_t id = (uint16_t)((my_seed_ ^ link_seed) % core.items), n;
+    my_n_ = 0;
+    for (n = 0; n < core.items && my_n_ < 8u; n++) {
+      id = player_owned_next(id);
+      if (id >= 4u && cri_depth(&core, id) <= 3u) my_bag_[my_n_++] = id;
     }
-    if (fr_kit_cost(kit, 6) > player_budget()) player_autokit(kit, player_budget());
-  }
-  pas[0] = (uint8_t)(pl.equip & 15u);
-  pas[1] = player_slots() >= 2u ? (uint8_t)(pl.equip >> 4) : 15u;
-  if (pas[0] >= FP_COUNT || !(pl.known & player_bit(pas[0]))) pas[0] = FP_NONE;
-  if (pas[1] >= FP_COUNT || !(pl.known & player_bit(pas[1]))) pas[1] = FP_NONE;
+  } else
+    my_n_ = fs_bag(my_bag_);
 }
-/* the setup goes out a packet at a time, in turn, and only on an idle line: in a fight a loop can take several frames
- * and moves one byte, so seven packets sent at once never drained and the same tail was dropped every time */
-static uint8_t setup_k_;
 static uint8_t send_setup_one(uint8_t k) {
-  uint16_t kit[6];
-  uint8_t pas[2];
-  kit_now(kit, pas);
-  if (k < 3u)
-    return link_send(P_DECK, (uint16_t)(kit[k * 2u] | ((uint16_t)(k * 2u) << 13)),
-                     (uint16_t)(kit[k * 2u + 1u] | ((uint16_t)(k * 2u + 1u) << 13)));
-  if (k == 3u)
+  if (k < 4u)
+    return link_send(P_DECK, (uint16_t)(my_bag_[k * 2u] | ((uint16_t)(k * 2u) << 13)),
+                     (uint16_t)(my_bag_[k * 2u + 1u] | ((uint16_t)(k * 2u + 1u) << 13)));
+  if (k == 4u)
     return link_send(P_AVATAR, (uint16_t)(pl.genome[0] | ((uint16_t)pl.genome[1] << 8)),
                      (uint16_t)(pl.genome[2] | ((uint16_t)pl.genome[3] << 8)));
-  if (k == 4u)
+  if (k == 5u)
     return link_send(P_AVATAR2, (uint16_t)(pl.genome[4] | ((uint16_t)pl.genome[5] << 8)),
                      (uint16_t)(pl.level | ((uint16_t)pl.attrs << 8)));
-  if (k == 5u) return link_send(P_CAT, core.items, core.recipes);
-  return link_send(P_PAS,
-                   (uint16_t)((pas[0] & 15u) | ((pas[1] & 15u) << 4) |
-                              ((uint16_t)(my_cell() | (lp_have == SETUP_ALL ? 0x80u : 0u)) << 8)),
+  if (k == 6u) return link_send(P_CAT, core.items, core.recipes);
+  return link_send(P_PAS, (uint16_t)(my_n_ | ((uint16_t)(my_cell() | (lp_have == SETUP_ALL ? 0x80u : 0u)) << 8)),
                    my_seed_);
 }
-/* a session begins (both sides): the setup goes out */
+/* ---- the resync: the host's whole engine state (host order) as P_FSYNC chunks of three bytes ---- */
+#define SYNC_BYTES ((uint8_t)sizeof(cx_state))
+#define SYNC_CHUNKS ((uint8_t)((sizeof(cx_state) + 2u) / 3u))
+static uint8_t sync_buf_[((sizeof(cx_state) + 2u) / 3u) * 3u], sync_got_[4],
+    sync_k_ = 0xffu, ask_t_, want_sync_; /* want_sync_: the guest waits on a resync (asks again until it is whole) */
+/* every snapshot the host takes has an epoch (2 bits, in each chunk's index byte): the guest collects chunks of one
+ * epoch only and never applies the same epoch twice, so a chunk lost on a noisy wire is re-sent from the same snapshot
+ * and late copies of an old one are ignored. The guest's ask carries its ask number: a new number (a new mismatch)
+ * takes a fresh snapshot, the same number (a chunk missing, or a late ask) re-sends the snapshot it already has. */
+static uint8_t sync_ep_, got_ep_ = 0xffu, done_ep_ = 0xffu, ask_id_, served_id_ = 0xffu;
+static uint8_t pas_more_;
 void link_play_begin(void) BANKED {
   lp_ready = lp_have = lp_they_have = 0;
   lp_wins[0] = lp_wins[1] = 0;
@@ -102,86 +93,140 @@ void link_play_begin(void) BANKED {
   cat_ok_ = 1;
   lp_desyncs = 0;
   lp_resends = 0;
-  have_theirs_ = 0;
-  acked_ = 0;
-  my_turn_[0] = my_turn_[1] = 0xffu;
-  fturn_in_ = 0;
+  lp_synced = 0;
+  my_key_ = 0xffu;
+  acked_ = 1;
+  in_ = 0;
   lp_sync_n = 0;
-  sync_k_ = 0xffu;
-  ask_t_ = 0;
+  want_sync_ = 0;
   memset(sync_got_, 0, sizeof sync_got_);
+  got_ep_ = done_ep_ = served_id_ = 0xffu;
+  sync_k_ = 0xffu;
+  pas_more_ = 8;
+  lp_match = 0;
+  lp_result = 0;
+  lp_again[0] = lp_again[1] = 0;
+  lp_left = 0;
   my_seed_ = (uint16_t)(core.variant_seed ^ core.rng);
-  if (!my_seed_) my_seed_ = 0x5eedu; /* taken once: the seed sent is the seed used */
+  if (!my_seed_) my_seed_ = 0x5eedu;
+  memset(my_bag_, 0, sizeof my_bag_);
+  my_n_ = 0;
+  if (link_mode == LINK_FIGHT) bag_now();
 }
-/* a packet crucible_link.c does not know: returns a LINK_EV_* */
-#define sync_buf_ fr_scratch /* the AI's scratch: never in use during a versus */
-static void sync_apply(void);
-static void sync_send(void);
+static void sync_send(uint8_t fresh) { /* fresh: a new snapshot (a new epoch); else the one taken last, again */
+  if (fresh) {
+    if (fight_swap) cx_swap();
+    memcpy(sync_buf_, &cx, sizeof cx);
+    if (fight_swap) cx_swap();
+    sync_ep_ = (uint8_t)((sync_ep_ + 1u) & 3u);
+  } else if (sync_k_ != 0xffu)
+    return; /* (already streaming it) */
+  sync_k_ = 0;
+  lp_desyncs++;
+}
+static void sync_stream(void) {
+  uint8_t i = sync_k_;
+  if (i == 0xffu)
+    return; /* (not only on an idle line: a busy one starved the stream; send() refuses when the queue is full) */
+  if (link_send(P_FSYNC, (uint16_t)((uint8_t)(i | (uint8_t)(sync_ep_ << 5)) | ((uint16_t)sync_buf_[i * 3u] << 8)),
+                (uint16_t)(sync_buf_[i * 3u + 1u] | ((uint16_t)sync_buf_[i * 3u + 2u] << 8))))
+    sync_k_ = (uint8_t)(i + 1u) < SYNC_CHUNKS ? (uint8_t)(i + 1u) : 0xffu;
+}
+static void sync_apply(void) { /* the guest adopts the host's state; the turn starts again from it */
+  memcpy(&cx, sync_buf_, sizeof cx);
+  if (fight_swap) cx_swap();
+  in_ = 0;
+  my_key_ = 0xffu;
+  acked_ = 1;
+  lp_desyncs++;
+  lp_synced = 1;
+  want_sync_ = 0;
+}
+uint8_t link_synced(void) BANKED {
+  uint8_t s = lp_synced;
+  lp_synced = 0;
+  return s;
+}
+void link_fsync_ask(void) BANKED {
+  if (link_role == LINK_HOST) {
+    sync_send(1);
+    return;
+  }
+  if (!want_sync_) {
+    want_sync_ = 1;
+    ask_id_ = (uint8_t)((ask_id_ + 1u) & 3u);
+    ask_t_ = 0;
+  }
+  if (!ask_t_ && link_send(P_FSYNC, (uint16_t)(0xffu | ((uint16_t)ask_id_ << 8)), 0)) ask_t_ = 120u;
+}
 uint8_t link_play_packet(uint8_t type, uint16_t a, uint16_t b) BANKED {
   uint8_t lo = (uint8_t)a, hi = (uint8_t)(a >> 8);
   switch (type) {
-  case P_DECK:
-    their_kit_[(a >> 13) & 7u] = (uint16_t)(a & 0x1fffu);
-    their_kit_[(b >> 13) & 7u] = (uint16_t)(b & 0x1fffu);
-    {
-      uint8_t q = (uint8_t)(((a >> 13) & 7u) >> 1);
-      lp_have |= q == 0u ? 1u : q == 1u ? 2u : 4u;
-    }
-    break;
+  case P_DECK: {
+    uint8_t s1 = (uint8_t)((a >> 13) & 7u), s2 = (uint8_t)((b >> 13) & 7u);
+    their_bag_[s1] = (uint16_t)(a & 0x1fffu);
+    their_bag_[s2] = (uint16_t)(b & 0x1fffu);
+    lp_have |= BIT8[s1 >> 1];
+  } break;
   case P_AVATAR:
     their_g_[0] = lo;
     their_g_[1] = hi;
     their_g_[2] = (uint8_t)b;
     their_g_[3] = (uint8_t)(b >> 8);
-    lp_have |= 8u;
+    lp_have |= 16u;
     break;
   case P_AVATAR2:
     their_g_[4] = lo;
     their_g_[5] = hi;
     their_level_ = (uint8_t)b;
     their_attrs_ = (uint8_t)(b >> 8);
-    lp_have |= 16u;
+    lp_have |= 32u;
     break;
   case P_CAT:
     cat_ok_ = a == core.items && b == core.recipes;
-    lp_have |= 32u;
+    lp_have |= 64u;
     break;
   case P_PAS:
-    their_pas_[0] = (uint8_t)(lo & 15u);
-    their_pas_[1] = (uint8_t)(lo >> 4);
+    their_n_ = lo > 8u ? 8u : lo;
     their_cell_ = (uint8_t)(hi & 15u);
     their_seed_ = b;
-    lp_have |= 64u;
+    lp_have |= 128u;
     if (hi & 0x80u) lp_they_have = 1;
-    if (lp_have == SETUP_ALL) (void)send_setup_one(6); /* we hold all of theirs: say so (they may still be asking) */
+    if (lp_have == SETUP_ALL) (void)send_setup_one(7);
     break;
   case P_FTURN:
-    if (((uint8_t)(b >> 8) & 0x80u) && hi == my_turn_[0]) acked_ = 1; /* they hold my turn */
+    if (b & 0x4000u) {
+      if (hi == my_key_) acked_ = 1;
+      break;
+    } /* an ack: they hold my move */
     {
       uint8_t k = (uint8_t)(hi & 1u);
-      if (hi != their_turn_[k] || !(fturn_in_ & BIT8[k]) ||
-          (uint8_t)b != their_hash_[k]) { /* (a new hash for the same turn: the partner was resynced) */
-        their_act_[k] = lo;
-        their_turn_[k] = hi;
+      if (!(in_ & BIT8[k]) || their_key_[k] != hi || their_hash_[k] != (uint8_t)b) {
+        their_word_[k] = (uint16_t)(lo | ((b >> 8) & 3u) << 8);
+        their_key_[k] = hi;
         their_hash_[k] = (uint8_t)b;
-        their_pip_[k] = (uint8_t)((b >> 8) & 7u);
-        fturn_in_ |= BIT8[k];
+        in_ |= BIT8[k];
       }
-    }
-    if (hi == my_turn_[1] && my_turn_[1] != 0xffu && !((uint8_t)(b >> 8) & 0x80u)) {
-      (void)link_send(P_FTURN, (uint16_t)(my_act_[1] | ((uint16_t)my_turn_[1] << 8)),
-                      (uint16_t)(my_hash_[1] | 0x8000u));
-      lp_resends++;
-    } /* they missed my last one */
+      (void)link_send(P_FTURN, (uint16_t)((uint16_t)hi << 8), 0x4000u); /* ack every copy */
+      if (my_key_ != 0xffu && hi == (uint8_t)((my_key_ & 0xc0u) | ((my_key_ + 1u) & 63u))) acked_ = 1;
+    } /* their move after mine: mine arrived (a stale copy of their last one proves nothing) */
     break;
   case P_FSYNC:
     if (lo == 0xffu) {
-      if (link_role == LINK_HOST) sync_send();
+      if (link_role == LINK_HOST) {
+        sync_send(hi != served_id_);
+        served_id_ = hi;
+      }
       break;
     }
-    if (lo < SYNC_CHUNKS &&
-        link_role != LINK_HOST) { /* the guest gathers every chunk, in any order, then adopts the state */
-      uint8_t k = (uint8_t)(lo * 3u), i, all = 1;
+    if (link_role != LINK_HOST && (lo & 31u) < SYNC_CHUNKS && (uint8_t)(lo >> 5) != done_ep_) {
+      uint8_t k, i, all = 1, ep = (uint8_t)(lo >> 5);
+      if (ep != got_ep_) {
+        got_ep_ = ep;
+        memset(sync_got_, 0, sizeof sync_got_);
+      }
+      lo &= 31u;
+      k = (uint8_t)(lo * 3u);
       sync_buf_[k] = hi;
       sync_buf_[k + 1u] = (uint8_t)b;
       sync_buf_[k + 2u] = (uint8_t)(b >> 8);
@@ -194,8 +239,11 @@ uint8_t link_play_packet(uint8_t type, uint16_t a, uint16_t b) BANKED {
         }
       if (all) {
         memset(sync_got_, 0, sizeof sync_got_);
+        done_ep_ = ep;
+        got_ep_ = 0xffu;
         sync_apply();
-      }
+      } else
+        want_sync_ = 1; /* (a chunk lost on the wire: ask again until it is whole) */
     }
     break;
   case P_LEAVE: link_end(LINK_LOST); break;
@@ -204,114 +252,20 @@ uint8_t link_play_packet(uint8_t type, uint16_t a, uint16_t b) BANKED {
       link_ask = (uint8_t)(b != 0u);
       return LINK_EV_RULES;
     }
-    return link_coop_packet(type, a, b); /* 0xff: the rules, asked about */
+    if (lo == 0xfeu && link_mode == LINK_FIGHT) { /* after a match: 1 again, 2 the partner leaves */
+      if ((uint8_t)b == 1u && hi == lp_match)
+        lp_again[1] = 1;
+      else if ((uint8_t)b == 2u) {
+        lp_left = 1;
+        if (lp_result) link_end(lp_result);
+      }
+      break;
+    }
+    return link_coop_packet(type, a, b);
   default: return link_coop_packet(type, a, b);
   }
   return LINK_EV_NONE;
 }
-/* ---- the resync (rare: identical tables and inputs never differ) ---- */
-/* the engine's state that the turn needs, both sides: 78 bytes as 26 chunks of 3 */
-#define SYNC_SIDE 37u
-static void side_pack(uint8_t *p, const fr_side *s) {
-  memcpy(p, s->deck, 6);
-  p[6] = s->ndeck;
-  memcpy(p + 7, s->disc, 6);
-  p[13] = s->ndisc;
-  memcpy(p + 14, s->hand, 4);
-  p[18] = s->nhand;
-  p[19] = (uint8_t)s->hp;
-  p[20] = s->focus;
-  p[21] = s->last;
-  p[22] = s->lostrow;
-  p[23] = s->wins;
-  p[24] = s->lost_hp;
-  p[25] = s->prog[0];
-  p[26] = s->prog[1];
-  p[27] = s->on;
-  memcpy(p + 28, s->win, 3);
-  p[31] = s->nwin;
-  p[32] = s->played;
-  p[33] = s->turns;
-  p[34] = s->repeats;
-  p[35] = s->nhist;
-  p[36] = s->hist[0];
-}
-static void side_unpack(const uint8_t *p, fr_side *s) {
-  memcpy(s->deck, p, 6);
-  s->ndeck = p[6];
-  memcpy(s->disc, p + 7, 6);
-  s->ndisc = p[13];
-  memcpy(s->hand, p + 14, 4);
-  s->nhand = p[18];
-  s->hp = (int8_t)p[19];
-  s->focus = p[20];
-  s->last = p[21];
-  s->lostrow = p[22];
-  s->wins = p[23];
-  s->lost_hp = p[24];
-  s->prog[0] = p[25];
-  s->prog[1] = p[26];
-  s->on = p[27];
-  memcpy(s->win, p + 28, 3);
-  s->nwin = p[31];
-  s->played = p[32];
-  s->turns = p[33];
-  s->repeats = p[34];
-  s->nhist = p[35];
-  s->hist[0] = p[36];
-}
-/* the host: its state, in the host's side order, packed once and streamed a chunk at a time on an idle line (26 at
- * once overflowed the queue); a stream already running is not restarted by the partner's repeated turns */
-static void sync_send(void) {
-  if (sync_k_ != 0xffu) return;
-  if (fight_swap) fr_swap_sides();
-  side_pack(sync_buf_, &fr.s[0]);
-  side_pack(sync_buf_ + SYNC_SIDE, &fr.s[1]);
-  sync_buf_[74] = (uint8_t)fr.rng;
-  sync_buf_[75] = (uint8_t)(fr.rng >> 8);
-  sync_buf_[76] = fr.turn;
-  sync_buf_[77] = 0;
-  if (fight_swap) fr_swap_sides();
-  sync_k_ = 0;
-  lp_desyncs++;
-}
-static void sync_stream(void) {
-  uint8_t i = sync_k_;
-  if (i == 0xffu || !link_idle()) return;
-  if (sync_buf_[76] != fr.turn) {
-    sync_k_ = 0xffu;
-    return;
-  } /* the turn moved on (the partner adopted an earlier stream): this one is stale */
-  if (link_send(P_FSYNC, (uint16_t)(i | ((uint16_t)sync_buf_[i * 3u] << 8)),
-                (uint16_t)(sync_buf_[i * 3u + 1u] | ((uint16_t)sync_buf_[i * 3u + 2u] << 8))))
-    sync_k_ = i + 1u < SYNC_CHUNKS ? (uint8_t)(i + 1u) : 0xffu;
-}
-static void sync_apply(void) { /* the guest adopts the host's state (only for the turn it stands at) */
-  if (sync_buf_[76] != fr.turn) return;
-  if (fight_swap) fr_swap_sides();
-  side_unpack(sync_buf_, &fr.s[0]);
-  side_unpack(sync_buf_ + SYNC_SIDE, &fr.s[1]);
-  fr_side_fix(0);
-  fr_side_fix(1);
-  fr.rng = (uint16_t)(sync_buf_[74] | ((uint16_t)sync_buf_[75] << 8));
-  fr.turn = sync_buf_[76];
-  if (my_turn_[0] == fr.turn) {
-    my_hash_[0] = fr_hash();
-    acked_ = 0;
-    turn_t_ = RESEND_TURN;
-  } /* our turn goes again (at once) with the state we hold now */
-  if (fight_swap) fr_swap_sides();
-  lp_desyncs++; /* the partner's move for this turn stays: with the state adopted, its hash now agrees */
-}
-void link_fsync_ask(void) BANKED {
-  if (link_role == LINK_HOST)
-    sync_send();
-  else if (!ask_t_) {
-    (void)link_send(P_FSYNC, 0xffu, 0);
-    ask_t_ = 120u;
-  }
-} /* (the moves held stay: a resync changes only the state) */
-/* every frame of a session: the re-sends */
 void link_play_tick(uint8_t dt) BANKED {
   if (!link_started) return;
   if (link_mode != LINK_FIGHT) {
@@ -320,153 +274,157 @@ void link_play_tick(uint8_t dt) BANKED {
   }
   sync_stream();
   if (ask_t_) ask_t_ = ask_t_ > dt ? (uint8_t)(ask_t_ - dt) : 0u;
+  if (want_sync_ && !ask_t_ && link_send(P_FSYNC, (uint16_t)(0xffu | ((uint16_t)ask_id_ << 8)), 0)) ask_t_ = 120u;
   if (!(lp_have == SETUP_ALL && lp_they_have)) {
     if (setup_t_ < 255u - dt) setup_t_ = (uint8_t)(setup_t_ + dt);
     if (setup_t_ >= SETUP_GAP && link_idle() && send_setup_one(setup_k_)) {
       setup_t_ = 0;
-      setup_k_ = setup_k_ < 6u ? (uint8_t)(setup_k_ + 1u) : 0u;
+      setup_k_ = setup_k_ < 7u ? (uint8_t)(setup_k_ + 1u) : 0u;
     }
-  } else
+  } else {
     lp_ready = cat_ok_ ? 1u : 2u;
-  if (my_turn_[0] != 0xffu && !acked_) {
+    /* "I hold all of yours" crosses a few more times: a lost reply left the partner waiting in its entrance */
+    if (pas_more_) {
+      if (setup_t_ < 255u - dt) setup_t_ = (uint8_t)(setup_t_ + dt);
+      if (setup_t_ >= RESEND_SETUP && link_idle() && send_setup_one(7)) {
+        setup_t_ = 0;
+        pas_more_--;
+      }
+    }
+  }
+  if (lp_again[0] && !lp_again[1]) {
+    again_t_ = (uint8_t)(again_t_ + dt);
+    if (again_t_ >= RESEND_TURN) {
+      again_t_ = 0;
+      (void)link_send(P_READY, (uint16_t)(0xfeu | ((uint16_t)lp_match << 8)), 1u);
+    }
+  }
+  if (my_key_ != 0xffu && !acked_) {
     turn_t_ = (uint8_t)(turn_t_ + dt);
     if (turn_t_ >= RESEND_TURN) {
       turn_t_ = 0;
-      (void)link_send(P_FTURN, (uint16_t)(my_act_[0] | ((uint16_t)my_turn_[0] << 8)),
-                      (uint16_t)(my_hash_[0] | ((uint16_t)(my_pip_ | (have_theirs_ ? 0x80u : 0u)) << 8)));
+      (void)link_send(P_FTURN, (uint16_t)((my_word_ & 0xffu) | ((uint16_t)my_key_ << 8)),
+                      (uint16_t)(my_hash_ | ((my_word_ >> 8) & 3u) << 8));
       lp_resends++;
     }
   }
 }
-uint8_t link_fight_ready(void) BANKED { return lp_ready; } /* 0 not yet, 1 ready, 2 the other room is different */
-
-/* ---- the versus' setup, read by crucible_fight.c (sides in the host's order) ---- */
+uint8_t link_fight_ready(void) BANKED { return lp_ready; }
+/* ---- the versus' setup (sides in the host's order) ---- */
 uint16_t link_fight_seed(void) BANKED {
-  uint16_t mine = my_seed_, host = link_role == LINK_HOST ? mine : their_seed_,
-           guest = link_role == LINK_HOST ? their_seed_ : mine;
+  uint16_t host = link_role == LINK_HOST ? my_seed_ : their_seed_,
+           guest = link_role == LINK_HOST ? their_seed_ : my_seed_;
   uint8_t ch = link_role == LINK_HOST ? my_cell() : their_cell_, cg = link_role == LINK_HOST ? their_cell_ : my_cell();
-  uint16_t x = (uint16_t)(host ^ (uint16_t)((guest << 5) | (guest >> 11)) ^ ((uint16_t)ch << 8) ^ cg ^ link_seed ^
-                          ((uint16_t)lp_bout * 0x9e37u)); /* each bout of a match its own */
+  uint16_t x = (uint16_t)(host ^ (uint16_t)((guest << 5) | (guest >> 11)) ^ ((uint16_t)ch << 8) ^ cg ^ link_seed);
   x ^= (uint16_t)(x << 7);
   x ^= (uint16_t)(x >> 9);
   x ^= (uint16_t)(x << 8);
   return x ? x : 0x1d2bu;
 }
-/* the setup's own seed is sent once and kept, so both sides compute the same session seed */
-uint8_t link_fight_arena(void) BANKED {
-  uint8_t r7 = link_rule(7);
-  return r7 >= 1u && r7 <= 8u ? (uint8_t)(r7 - 1u) : r7 > 8u ? (uint8_t)((link_seed >> 3) & 7u) : FA_EMPTY;
+uint8_t link_fight_first(uint8_t round) BANKED { return (uint8_t)((link_fight_seed() ^ round ^ lp_match) & 1u); }
+void link_bags(uint16_t *host, uint8_t *hn, uint16_t *guest, uint8_t *gn) BANKED {
+  uint8_t i, me = link_role == LINK_HOST ? 0u : 1u;
+  uint16_t *mine = me ? guest : host, *theirs = me ? host : guest;
+  uint8_t *mn = me ? gn : hn, *tn = me ? hn : gn;
+  memcpy(mine, my_bag_, sizeof my_bag_);
+  *mn = my_n_;
+  for (i = 0; i < 8u; i++) theirs[i] = their_bag_[i] < core.items ? their_bag_[i] : 4u;
+  *tn = their_n_;
+  if (link_rule(3) & 64u) {
+    if (me) {
+      memcpy(guest, host, 16);
+      *gn = *hn;
+    } else {
+      memcpy(guest, host, 16);
+      *gn = *hn;
+    }
+  } /* MIRROR: both bring the host's */
 }
-uint8_t link_fight_rules(void) BANKED {
-  uint8_t r3 = link_rule(3), r = 0;
-  if (r3 & 1u) r |= FR_R_NOSTACK;
-  if (r3 & 2u) r |= FR_R_NOPAS;
-  if (r3 & 16u) r |= FR_R_SUDDEN;
-  if (r3 & 32u) r |= FR_R_FOG;
-  if (r3 & 4u)
-    r |= ((link_seed ^ lp_bout) & 1u)
-             ? FR_R_INVERT
-             : FR_R_FOG; /* a glitch arena: upside down or in fog (DRIFT rolls locally: never in lockstep) */
-  return r;
-}
-/* attributes by the rules (9.2): NORMALISED, CAPPED or FULL; then the side's handicap */
-static uint8_t attr_of(uint8_t side, uint8_t which) {
+static uint8_t attr_of(uint8_t side) {
   uint8_t mode = (uint8_t)((link_rule(1) >> 2) & 3u), a, mine = (uint8_t)(side == (link_role == LINK_HOST ? 0u : 1u));
-  uint8_t attrs = mine ? pl.attrs : their_attrs_, norm = which == PA_GRIT ? 2u : 1u;
-  a = which == PA_GRIT    ? (uint8_t)(attrs & 7u)
-      : which == PA_FOCUS ? (uint8_t)((attrs >> 3) & 3u)
-                          : (uint8_t)((attrs >> 5) & 3u);
-  if (mode == 0u) return norm;
-  if (mode == 1u && a > norm) return norm;
+  a = (uint8_t)((mine ? pl.attrs : their_attrs_) & 7u);
+  if (mode == 0u) return 2u;
+  if (mode == 1u && a > 2u) return 2u;
   return a;
 }
-static uint8_t hcap(uint8_t side) { return link_rule((uint8_t)(4u + side)); }
 uint8_t link_fight_hp(uint8_t side) BANKED {
   uint8_t r2 = link_rule(2) & 7u;
-  return (uint8_t)(8u + r2 + r2 + attr_of(side, PA_GRIT) + (hcap(side) & 7u));
-}
-uint8_t link_fight_focus(uint8_t side) BANKED {
-  uint8_t f = (uint8_t)(attr_of(side, PA_FOCUS) + ((hcap(side) >> 5) & 1u));
-  return f > 3u ? 3u : f;
-}
-void link_kit_mine(uint16_t *kit, uint8_t *pas) BANKED {
-  if ((link_rule(3) & 64u) && link_role != LINK_HOST) {
-    uint8_t i;
-    for (i = 0; i < 6u; i++) kit[i] = their_kit_[i] < core.items ? their_kit_[i] : 0u;
-    pas[0] = their_pas_[0];
-    pas[1] = their_pas_[1];
-  } /* mirror: the host's kit */
-  else
-    kit_now(kit, pas);
-  if (link_rule(3) & 2u) pas[0] = pas[1] = FP_NONE;
-  if (link_rule(link_role == LINK_HOST ? 4u : 5u) & 64u) pas[1] = FP_NONE; /* a handicap: one passive slot less */
-}
-void link_kit_theirs(uint16_t *kit, uint8_t *pas) BANKED {
-  uint8_t i;
-  for (i = 0; i < 6u; i++) kit[i] = their_kit_[i] < core.items ? their_kit_[i] : 0u;
-  pas[0] = their_pas_[0] < FP_COUNT ? their_pas_[0] : FP_NONE;
-  pas[1] = their_pas_[1] < FP_COUNT ? their_pas_[1] : FP_NONE;
-  if (link_rule(3) & 2u) pas[0] = pas[1] = FP_NONE;
-  if ((link_rule(3) & 64u) && link_role == LINK_HOST) {
-    uint8_t p2[2];
-    kit_now(kit, p2);
-  } /* mirror kits: both play the host's */
-  if (link_rule(link_role == LINK_HOST ? 5u : 4u) & 64u) pas[1] = FP_NONE;
+  return (uint8_t)(8u + r2 + r2 + attr_of(side) + (link_rule((uint8_t)(4u + side)) & 7u));
 }
 void link_partner_genome(uint8_t *g) BANKED { memcpy(g, their_g_, 6); }
 uint8_t link_partner_level(void) BANKED { return their_level_; }
 uint8_t link_partner_attrs(void) BANKED { return their_attrs_; }
 /* ---- turns ---- */
-void link_fturn(uint8_t act, uint8_t turn, uint8_t hash, uint8_t pip) BANKED {
-  my_act_[1] = my_act_[0];
-  my_turn_[1] = my_turn_[0];
-  my_hash_[1] = my_hash_[0];
-  my_act_[0] = act;
-  my_turn_[0] = turn;
-  my_hash_[0] = hash;
-  my_pip_ = (uint8_t)(pip & 7u);
+void link_fturn(uint16_t w, uint8_t turn, uint8_t hash) BANKED {
+  my_word_ = w;
+  my_key_ = key_(turn);
+  my_hash_ = hash;
   acked_ = 0;
   turn_t_ = 0;
-  have_theirs_ = (fturn_in_ & BIT8[turn & 1u]) && their_turn_[turn & 1u] == turn
-                     ? 1u
-                     : 0u; /* for this turn (it was left set from the last one)*/
-  (void)link_send(P_FTURN, (uint16_t)(act | ((uint16_t)turn << 8)),
-                  (uint16_t)(hash | ((uint16_t)(my_pip_ | (have_theirs_ ? 0x80u : 0u)) << 8)));
+  (void)link_send(P_FTURN, (uint16_t)((w & 0xffu) | ((uint16_t)my_key_ << 8)), (uint16_t)(hash | ((w >> 8) & 3u) << 8));
 }
-uint8_t link_fturn_in(uint8_t *act, uint8_t *turn, uint8_t *hash, uint8_t *pip) BANKED {
-  uint8_t k = (uint8_t)(*turn & 1u); /* *turn: the turn wanted */
-  if (!(fturn_in_ & BIT8[k]) || their_turn_[k] != *turn) return 0;
-  *act = their_act_[k];
+uint8_t link_xturn_in(uint16_t *w, uint8_t turn, uint8_t *hash) BANKED {
+  uint8_t key = key_(turn), k = (uint8_t)(key & 1u);
+  if (!(in_ & BIT8[k]) || their_key_[k] != key) return 0;
+  *w = their_word_[k];
   *hash = their_hash_[k];
-  *pip = their_pip_[k];
-  if (*turn == my_turn_[0] && !have_theirs_) {
-    have_theirs_ = 1;
-    if (!acked_) turn_t_ = RESEND_TURN;
-  } /* our next re-send carries the ack */
+  in_ &= (uint8_t)~BIT8[k];
   return 1;
 }
-uint8_t link_partner_locked(uint8_t turn) BANKED {
-  return (fturn_in_ & BIT8[turn & 1u]) && their_turn_[turn & 1u] == turn;
+void link_round_reset(void) BANKED {
+  in_ = 0;
+  my_key_ = 0xffu;
+  acked_ = 1;
 }
-/* a bout ended (r for this side: 1 won, 2 lost, 3 a draw): only FAIR counts for the feats (owner, 14.5) */
 static const uint8_t PIPS[4] = {6, 4, 3, 2}, NEED[4] = {1, 2, 3, 2};
 uint8_t link_fight_pips(void) BANKED {
   return (uint8_t)(PIPS[(link_rule(1) >> 6) & 3u] + ((link_rule(link_role == LINK_HOST ? 4u : 5u) & 0x80u) ? 1u : 0u));
 }
+/* a round ended (r for this side: 1 won, 2 lost, 3 a draw); 1: the match goes on. At the match's end the result is
+ * kept (the end screen shows it; LEAVE ends the session with it, AGAIN asks for another match) */
 uint8_t link_fight_over(uint8_t r) BANKED {
-  uint8_t xp = r == 1u ? 15u : 10u, need = NEED[(link_rule(1) >> 4) & 3u];
+  uint8_t xp, need = NEED[(link_rule(1) >> 4) & 3u];
   if (r == 1u)
     lp_wins[0]++;
   else if (r == 2u)
-    lp_wins[1]++; /* [0] this side, [1] the partner */
+    lp_wins[1]++;
   lp_bout++;
-  if (lp_wins[0] < need && lp_wins[1] < need && lp_bout < 9u)
-    return 1; /* the match goes on (draws count as a bout: nine at most) */
+  if (lp_wins[0] < need && lp_wins[1] < need && lp_bout < 9u) return 1;
   r = lp_wins[0] > lp_wins[1] ? 1u : lp_wins[0] < lp_wins[1] ? 2u : 3u;
   xp = r == 1u ? 15u : 10u;
-  if ((link_rule(1) & 3u) == 0u && r == 1u) cru_link(&core);
+  if ((link_rule(1) & 3u) == 0u && r == 1u) cru_link(&core); /* only FAIR counts for the feats */
   (void)player_xp(xp);
   player_save();
-  link_end(r == 1u ? LINK_WON : r == 2u ? LINK_LOSTRACE : LINK_DRAW);
+  lp_result = r == 1u ? LINK_WON : r == 2u ? LINK_LOSTRACE : LINK_DRAW;
+  lp_again[0] = lp_again[1] = 0;
+  again_t_ = 0;
+  if (lp_left) link_end(lp_result);
   return 0;
+}
+/* the end screen's AGAIN (1) or LEAVE (0); link_rematch_go: both asked, a new match */
+void link_rematch(uint8_t again) BANKED {
+  if (again) {
+    if (!lp_again[0]) {
+      lp_again[0] = 1;
+      again_t_ = RESEND_TURN;
+    }
+    return;
+  }
+  (void)link_send(P_READY, (uint16_t)(0xfeu | ((uint16_t)lp_match << 8)), 2u);
+  (void)link_send(P_READY, (uint16_t)(0xfeu | ((uint16_t)lp_match << 8)), 2u);
+  link_end(lp_result ? lp_result : LINK_DRAW);
+}
+uint8_t link_rematch_go(void) BANKED {
+  if (!(lp_again[0] && lp_again[1])) return 0;
+  (void)link_send(P_READY, (uint16_t)(0xfeu | ((uint16_t)lp_match << 8)),
+                  1u); /* (one more: theirs may still be waiting for mine) */
+  lp_match++;
+  lp_wins[0] = lp_wins[1] = 0;
+  lp_bout = 0;
+  lp_result = 0;
+  lp_again[0] = lp_again[1] = 0;
+  in_ = 0;
+  my_key_ = 0xffu;
+  acked_ = 1;
+  return 1;
 }

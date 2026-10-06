@@ -24,6 +24,7 @@
 #include "crucible_storyrun.h"
 #include "crucible_link_rules.h"
 #include "crucible_player.h"
+#include "crucible_fight.h"
 #define T_CREAM 7u
 #define T_BRASS 15u
 #define SYNC 0xA5u
@@ -434,6 +435,23 @@ void link_hud(void) BANKED {
 void link_result_draw(void) BANKED {
   char s[6];
   uint8_t y;
+  crucible_load_font(); /* a fight may have swapped its icons into the font (a cable pulled mid-fight) */
+  if (link_mode == LINK_FIGHT) { /* the versus: the end screen's frame, its pixel title */
+    char t[14], l1[20], l2[20]; /* (copied to WRAM: the card is drawn from another bank) */
+    strcpy(t, result_ == LINK_WON        ? "YOU WIN"
+              : result_ == LINK_LOSTRACE ? "THEY WIN"
+              : result_ == LINK_DRAW     ? "NEITHER FALLS"
+                                         : "NO CONTEST");
+    if (result_ == LINK_LOST) {
+      char l[12];
+      crucible_text_line(EV_CONTEST_FIRST, l, sizeof l, 0);
+      if (l[0]) strcpy(t, l);
+    }
+    strcpy(l1, "THE MATCH IS OVER");
+    strcpy(l2, "WHAT YOU MADE STAYS");
+    fight_card(t, result_ == LINK_WON, l1, l2);
+    return;
+  }
   scene_draw(SCENE_RECORDS);
   for (y = 0; y < 18u; y++) text_(0, y, " ", 20, T_CREAM);
   text_(4, 4,
@@ -448,9 +466,10 @@ void link_result_draw(void) BANKED {
     text_(4, 4, l, 10, T_CREAM);
   } /* a FIGHT the cable broke: nobody's feat, nobody's loss */
   if (link_mode == LINK_FIGHT) {
-    text_(3, 8, result_ == LINK_WON ? "THEIR LAST ONE" : "THE BOUT IS OVER", 16, T_BRASS);
-    if (result_ == LINK_WON) text_(3, 9, "IS YOURS NOW", 12, T_BRASS);
-  } else {
+    text_(1, 8, "THE MATCH IS OVER", 17, T_BRASS);
+    text_(0, 9, "WHAT YOU MADE STAYS", 19, T_BRASS);
+  } /* (THE CRUCIBLE: your new forges are discoveries) */
+  else {
     text_(3, 8, "YOUR FINDS", 10, T_BRASS);
     num_(s, mine_, 3);
     text_(14, 8, s, 3, T_CREAM);

@@ -91,7 +91,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        harness: [flow, link, discoveries, overlay, lost_piece, fight]
+        harness: [flow, link, discoveries, overlay, lost_piece, crux]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

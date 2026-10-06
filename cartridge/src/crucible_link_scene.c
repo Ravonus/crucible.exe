@@ -91,10 +91,10 @@ void link_scene_round(uint8_t beat) BANKED { /* a new round: who answers it */
   a = active_for(beat);
   streak_ = a == last_active_ ? (uint8_t)(streak_ + 1u) : 1u;
   last_active_ = a;
+  if (in_beat_ != beat) have_in_ = 0; /* (an answer for this round that came before the round opened here is kept) */
   ls_beat = beat;
   ls_active = a;
   ls_nudge = 0xffu;
-  have_in_ = 0;
 }
 uint8_t link_scene_shared(void) BANKED { return ls_state == LS_SHARED; }
 /* 1: this cartridge answers the round (the partner gone quiet for 3 s: always) */
@@ -146,13 +146,17 @@ uint8_t link_scene_packet(uint8_t type, uint16_t a, uint16_t b) BANKED {
       ls_role = LS_WATCHER;
       ls_state = LS_COLLECT;
       ls_seed = b;
-      ls_got[0] = ls_got[1] = 0;
       ls_t = 0;
-    }
+      if (!(ls_got[0] & 1u) || ls_word(0) != b) ls_got[0] = ls_got[1] = 0;
+    } /* (chunks that came before the cue count: the owner sends them only while it waits for us) */
     return LINK_EV_NONE;
   }
   if (type == P_READY) {
     if (lo == 0x80u) { /* the scene ended (or was given up) on the other side */
+      if (ls_role == LS_NONE) {
+        ls_got[0] = ls_got[1] = 0;
+        return LINK_EV_NONE;
+      } /* (its chunks never became a scene here) */
       if (ls_role == LS_WATCHER && ls_state != LS_SHARED) {
         link_scene_reset();
         link_coop_elsewhere();
@@ -174,7 +178,7 @@ uint8_t link_scene_packet(uint8_t type, uint16_t a, uint16_t b) BANKED {
   if (type == P_BEAT) {
     if ((lo & 0xC0u) == 0xC0u) { /* a setup chunk */
       uint8_t k = (uint8_t)(lo & 0x1fu);
-      if (ls_role == LS_WATCHER && ls_state == LS_COLLECT && k < LS_WORDS) {
+      if (((ls_role == LS_WATCHER && ls_state == LS_COLLECT) || ls_role == LS_NONE) && k < LS_WORDS) {
         words_put(k, b);
         ls_got[k >> 3] |= (uint8_t)(1u << (k & 7u));
       }
@@ -188,6 +192,7 @@ uint8_t link_scene_packet(uint8_t type, uint16_t a, uint16_t b) BANKED {
       in_p0_ = hi;
       in_p1_ = (uint8_t)b;
       in_close_ = (uint8_t)(b >> 8);
+      in_beat_ = lo;
       have_in_ = 1;
     } else if (ls_state == LS_SHARED && (uint8_t)(lo - ls_beat) < 0x80u)
       return LINK_EV_NONE; /* a round still ahead of us: no ack, it comes again */

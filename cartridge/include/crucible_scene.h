@@ -8,6 +8,8 @@ enum { SCENE_BENCH, SCENE_REVEAL, SCENE_BOOK, SCENE_RECORDS, SCENE_MENU };
 #define PAL_MUTED 4u
 #define PAL_WOOD 7u
 void scene_draw(uint8_t) BANKED;
+void scene_begin(uint8_t) BANKED; /* scene_draw in parts: the tiles, then scene_rows(n) a few rows at a time */
+uint8_t scene_rows(uint8_t n) BANKED;
 void scene_twinkle(uint8_t) BANKED;
 /* plaster, sky, wood, muted (16 colours) */
 void scene_palettes(uint16_t *) BANKED;

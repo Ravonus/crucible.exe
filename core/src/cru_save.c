@@ -155,68 +155,139 @@ static const uint8_t rec_kind[FIELDS] = {U16,
                                          U16};
 #define BOARD_AT 429u /* then the leaderboard, 80 bytes, to 509 */
 
-typedef struct {
-  uint16_t at, crc;
-} writer;
-static void put(crucible_core *c, writer *w, uint8_t b) {
-  cri_wr(c, w->at, b);
-  w->at++;
-  w->crc = crc_step(w->crc, b);
+/* The record is written by a resumable job: cri_write runs it to the end at once (as it always did); a host that wants
+ * no stall (the cartridge's reveal) starts it with cru_save_begin and calls cru_save_step a few bytes a frame. The
+ * record is the same either way. A torn record fails its CRC and the other slot is used, so a job cut short by power
+ * loss is safe; the areas change (cri_play_commit) only once the record is whole, and any other save first finishes the
+ * job (cri_save_flush), so the journal order holds. */
+#define J (c->job)
+static void jput(crucible_core *c, uint8_t b) {
+  cri_wr(c, (uint16_t)(J.base + J.pos), b);
+  J.pos++;
+  J.crc = crc_step(J.crc, b);
 }
-
+static uint8_t field_len(crucible_core *c, uint8_t k) {
+  (void)c;
+  switch (k & (uint8_t)~V4) {
+  case K_LIVE: return P_BLOCK;
+  case K_NEW8: return 1u;
+#ifndef CRU_NO_CARD
+  case K_CARD: return CRU_CARD_BYTES;
+#endif
+  case K_ITEMS:
+  case K_RECIPES:
+  case U16: return 2u;
+  default: return (uint8_t)(k & 0x3fu);
+  }
+}
+static uint8_t field_byte(crucible_core *c, uint8_t i, uint8_t n) {
+  uint8_t k = rec_kind[i], *p = (uint8_t *)c + rec_off[i];
+  uint16_t v;
+  switch (k & (uint8_t)~V4) {
+  case K_LIVE: return cri_rd(c, (uint16_t)(P_LIVE + n));
+  case K_NEW8:
+    v = c->last_new;
+    if (v > 255u) v = 255u;
+    return (uint8_t)v;
+#ifndef CRU_NO_CARD
+  case K_CARD: return c->card ? c->card[n] : 0;
+#endif
+  case K_ITEMS: v = c->items; break;
+  case K_RECIPES: v = c->recipes; break;
+  case U16: v = *(const uint16_t *)p; break;
+  default: return p[n];
+  }
+  return n ? (uint8_t)(v >> 8) : (uint8_t)v;
+}
+static void job_begin(crucible_core *c) {
+  c->sequence++;
+  J.base = (c->sequence & 1u) ? P_V4_B : P_V4_A;
+  J.pos = 0;
+  J.crc = 0xffffu;
+  J.phase = 0;
+  J.i = 0;
+  J.n = 0;
+  J.bi = 0;
+  J.on = 1;
+}
+/* up to `budget` bytes of the record; 1 while it is not whole */
+static uint8_t job_step(crucible_core *c, uint8_t budget) {
+  while (J.on && budget) {
+    budget--;
+    switch (J.phase) {
+    case 0:
+      jput(c, J.pos ? (c->place == CRU_PLACE_WIDE ? 5u : 4u) : 0xc1u);
+      if (J.pos >= 2u) J.phase = 1;
+      break; /* v5: the WIDE placement */
+    case 1:
+      if (J.i >= FIELDS) {
+        J.phase = 2;
+        budget++;
+        break;
+      }
+      if (J.pos < rec_at[J.i]) {
+        jput(c, 0);
+        break;
+      }
+      jput(c, field_byte(c, J.i, J.n));
+      if (++J.n >= field_len(c, rec_kind[J.i])) {
+        J.n = 0;
+        J.i++;
+      }
+      break;
+    case 2:
+      if (J.bi < CRU_BOARD_ROWS * CRU_BOARD_ROW) {
+        jput(c, c->board[J.bi]);
+        J.bi++;
+      } else {
+        J.phase = 3;
+        budget++;
+      }
+      break;
+    case 3:
+      jput(c, 0);
+      J.phase = 4;
+      break; /* 509 */
+    case 4:
+      cri_wr(c, (uint16_t)(J.base + J.pos), (uint8_t)J.crc);
+      J.phase = 5;
+      break;
+    default:
+      cri_wr(c, (uint16_t)(J.base + J.pos + 1u), (uint8_t)(J.crc >> 8));
+      J.on = 0;
+      if (J.commit) {
+        J.commit = 0;
+        cri_play_commit(c);
+      }
+      break;
+    }
+  }
+  return J.on;
+}
 /* Writes the next record (sequence + 1, the other slot). */
 void cri_write(crucible_core *c) CORE_LOCAL {
-  writer w;
-  uint16_t base, v = 0;
-  uint8_t i, k, n, *p;
-  c->sequence++;
-  base = P_V4_A;
-  if (c->sequence & 1u) base = P_V4_B;
-  w.at = base;
-  w.crc = 0xffffu;
-  put(c, &w, 0xc1u);
-  if (c->place == CRU_PLACE_WIDE)
-    put(c, &w, 5u); /* v5: the WIDE placement */
-  else
-    put(c, &w, 4u);
-  for (i = 0; i < FIELDS; i++) {
-    while ((uint16_t)(w.at - base) < rec_at[i]) put(c, &w, 0);
-    k = rec_kind[i];
-    p = (uint8_t *)c + rec_off[i];
-    switch (k & (uint8_t)~V4) {
-    case K_LIVE:
-      for (n = 0; n < P_BLOCK; n++) put(c, &w, cri_rd(c, (uint16_t)(P_LIVE + n)));
-      continue;
-    case K_NEW8:
-      v = c->last_new;
-      if (v > 255u) v = 255u;
-      put(c, &w, (uint8_t)v);
-      continue;
-#ifndef CRU_NO_CARD
-    case K_CARD:
-      for (n = 0; n < CRU_CARD_BYTES; n++) put(c, &w, c->card ? c->card[n] : 0);
-      continue;
-#endif
-    case K_ITEMS: v = c->items; break;
-    case K_RECIPES: v = c->recipes; break;
-    case U16: v = *(const uint16_t *)p; break;
-    default:
-      for (n = (uint8_t)(k & 0x3fu); n; n--) put(c, &w, *p++);
-      continue;
-    }
-    put(c, &w, (uint8_t)v);
-    put(c, &w, (uint8_t)(v >> 8));
-  }
-  for (p = c->board; p < c->board + CRU_BOARD_ROWS * CRU_BOARD_ROW; p++) put(c, &w, *p);
-  put(c, &w, 0); /* 509 */
-  cri_wr(c, w.at, (uint8_t)w.crc);
-  cri_wr(c, (uint16_t)(w.at + 1u), (uint8_t)(w.crc >> 8));
+  cri_save_flush(c);
+  job_begin(c);
+  while (job_step(c, 255u)) {}
+}
+void cri_save_flush(crucible_core *c) CORE_LOCAL {
+  while (job_step(c, 255u)) {}
 }
 void cri_save(crucible_core *c) CORE_LOCAL {
+  cri_save_flush(c);
   cri_board_update(c);
   cri_write(c);
 }
 void cru_save(crucible_core *c) CORE_BANKED { cri_save(c); }
+/* the record written over frames; commit: the mix's areas change once it is whole (cru_mix_finish_later) */
+void cri_save_begin(crucible_core *c, uint8_t commit) CORE_LOCAL {
+  cri_save_flush(c);
+  cri_board_update(c);
+  job_begin(c);
+  J.commit = commit;
+}
+uint8_t cru_save_step(crucible_core *c, uint8_t budget) CORE_BANKED { return job_step(c, budget); }
+void cru_save_flush(crucible_core *c) CORE_BANKED { cri_save_flush(c); }
 
 /* ---- readers ---- */
 static uint8_t g8(crucible_core *c, uint16_t rec, uint16_t o) {
@@ -477,6 +548,8 @@ void cru_init(crucible_core *c, const crucible_tables *t, const crucible_store *
   c->layout = layout;
   c->lean = 0;
   c->card = 0; /* a host that keeps a player card sets it after cru_init, before cru_load */
+  c->job.on = 0;
+  c->job.commit = 0; /* no record being written */
   /* the placement: 32K, or for the 128K layout bank 0 while the catalogue fits v4, and WIDE beyond */
   if (layout == CRU_LAYOUT_128K) {
     place = CRU_PLACE_128K;

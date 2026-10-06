@@ -3,8 +3,8 @@
 Free play from a blank save, headless. Each mix is planned from the catalogue: recipes whose ingredients are owned,
 results from categories not shown yet first. For every new object:
 
-- the reveal is checked: from its first REVEAL frames the turntable is already turning (the overlay's view index
-  advances) with its overlay sprites present, and the merge's turn phase (crucible_reveal.c) is timed;
+- the reveal is checked: the card shows its object at once and it is turning (the overlay's view index advances)
+  within 300 frames with its overlay sprites present; turnFrames is the frames from the card to the first turn;
 - the reveal and then the object as the bench focus are saved as overlay pairs (`-overlay` as played, `-base` with the
   overlay's OAM entries 0..23 hidden for one frame);
 - the first --strips reveals are also saved as frame strips (the turn out of the glitch, the flash, the reveal).
@@ -17,6 +17,7 @@ its check.
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import sys
@@ -40,8 +41,11 @@ REVEAL_OAM = range(13, 18)  # cell B's sprites on the reveal (the burst has 0..1
 FOCUS_OAM_ENTRIES = 8  # a cell shows at most 8 sprites
 
 STRIP_COLUMNS = 12
-REVEAL_SAMPLE_FRAMES = 32
-SETTLED_SAMPLE_FRAMES = 16  # the view must advance within the first half of the sample
+# The card shows at once on the object's keyframe and turns through its views as they decode (speed was chosen over
+# waiting for the whole turntable): it must be turning within this window, typically after 15-60 frames.
+REVEAL_SAMPLE_FRAMES = 300
+REVEAL_MIN_FRAMES = 40  # sampled before an early stop, once turning with the overlay on
+STRIP_SAMPLE_FRAMES = 64  # the reveal frames that go into a strip (every 8th)
 MAX_DRAW_LAG = 120
 
 
@@ -54,7 +58,7 @@ class Shot(TypedDict):
 
 class Reveal(TypedDict):
     id: int
-    turnFrames: int
+    turnFrames: int | None
     drawLag: int
     views: list[int]
     overlaySprites: list[int]
@@ -63,7 +67,7 @@ class Reveal(TypedDict):
 
 
 class Bench:
-    """The bench in free play, with the shelf the cartridge shows: owned objects sorted by (category, id)."""
+    """The bench in free play: the objects owned and the cells the overlay shows."""
 
     def __init__(self, game: Session, cells: int, items: catalogue.Catalogue) -> None:
         self.game = game
@@ -80,17 +84,22 @@ class Bench:
     def focus(self) -> int:
         return self.cell_id(FOCUS_CELL)
 
-    def shelf(self) -> list[int]:
-        return sorted(self.owned, key=lambda i: (self.catalogue.category_index(i), i))
+    def moved_from(self, was: int) -> bool:
+        return self.focus() != was
 
     def goto(self, target: int) -> bool:
-        """Walk right along the shelf to `target`."""
-        shelf = self.shelf()
-        distance = (shelf.index(target) - shelf.index(self.focus())) % len(shelf)
-        for _ in range(distance):
-            self.game.pulse("right")
-            self.game.step(6)
-        self.game.step(30)
+        """Walk right along the shelf to `target`, one press per step, each waiting for the focus to move: with a
+        first pick held the bench also prefetches the likely result (crucible_reveal.c reveal_predict), so a step can
+        take longer than a fixed press cadence."""
+        game = self.game
+        for _ in range(len(self.owned) + 2):
+            if self.focus() == target:
+                break
+            moved = functools.partial(self.moved_from, self.focus())
+            game.pulse("right")
+            game.until(moved, 240)
+            game.step(6)
+        game.step(30)
         return self.focus() == target
 
     def next_recipe(self, shown_categories: set[int]) -> tuple[int, int, int] | None:
@@ -166,7 +175,6 @@ class Discoveries:
 
     def check_reveal(self, result: int, strip: list[Image.Image], keep: bool) -> None:
         game = self.game
-        turn = game.peek_wram(self.reveal_frames_at) | game.peek_wram(self.reveal_frames_at + 1) << 8
         # The switch to REVEAL also commits the save and draws the scene (under the white flash): count frames until
         # its cell shows the new object, then sample from there.
         lag = 0
@@ -178,9 +186,12 @@ class Discoveries:
         for f in range(REVEAL_SAMPLE_FRAMES):
             views.append(self.bench.cell_view(REVEAL_CELL))
             present.append(sum(1 for i in REVEAL_OAM if game.peek(OAM + i * OAM_ENTRY_BYTES)))
-            if keep and f % 8 == 0:
+            if keep and f % 8 == 0 and f < STRIP_SAMPLE_FRAMES:
                 strip.append(game.frame())
+            if f >= REVEAL_MIN_FRAMES and len(set(views)) >= 2 and max(present) > 0:
+                break
             game.step(1)
+        turn = next((i for i in range(1, len(views)) if views[i] != views[0]), None)
         self.reveals.append(
             {
                 "id": result,
@@ -188,8 +199,8 @@ class Discoveries:
                 "drawLag": lag,
                 "views": views,
                 "overlaySprites": present,
-                "advancingFromStart": len(set(views[:SETTLED_SAMPLE_FRAMES])) >= 2,
-                "overlayPresent": max(present[:4]) > 0,
+                "advancingFromStart": len(set(views)) >= 2,
+                "overlayPresent": max(present) > 0,
             }
         )
         if keep and strip:
@@ -276,7 +287,7 @@ def main() -> int:
     bad = run.failed_reveals()
     summary = {
         "reveals": len(run.reveals),
-        "turningAndOverlaidFromTheFirstFrames": len(run.reveals) - len(bad),
+        "turningAndOverlaid": len(run.reveals) - len(bad),
         "bad": bad,
         "turnFrames": [reveal["turnFrames"] for reveal in run.reveals],
         "drawLag": [reveal["drawLag"] for reveal in run.reveals],

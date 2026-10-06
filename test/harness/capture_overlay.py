@@ -35,7 +35,7 @@ def main() -> None:
         oam = game.overlay_pair(out, name)
         shots.append({"name": name, "overlaySprites": visible_sprites(oam, OVERLAY_OAM_ENTRIES)})
 
-    game.start_free_play(WAIT_LIMIT, strict=True)
+    game.start_free_play(WAIT_LIMIT, strict=True, until_bench=True)
     snap("bench")
     for i in range(args.browse):
         game.pulse("right")
@@ -47,12 +47,11 @@ def main() -> None:
     game.pulse("right")
     game.step(240)
     snap("slot-a-focus")
-    # The pause menu is a row: BOOK is one step right of where it opens.
+    # The pause menu is a grid (RESUME BOOK / TITLES STATS / SETUP LEAVE): BOOK is one step right of where it opens.
     game.pulse("start")
     game.wait_for(Screen.MENU, WAIT_LIMIT, strict=True)
-    game.step(30)
+    game.step(60)
     game.pulse("right")
-    game.step(10)
     game.pulse("a")
     game.wait_for(Screen.BOOK, WAIT_LIMIT, strict=True)
     game.step(300)

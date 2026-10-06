@@ -2,8 +2,8 @@
  * In the lobby, with MODE at FIGHT, two rows take the place of TIME and GOAL:
  *   RULES  FAIR / STRENGTH / CHAOS / CUSTOM (LEFT/RIGHT the presets; A opens the custom rows)
  *   EDGE   the suggested handicap, on or off (from both sides' attribute power, a line of arithmetic)
- * The custom rows (UP/DOWN, LEFT/RIGHT or A to change, B back): attributes, best of, pips, HP, the toggles and the
- * arena; any change makes the preset CUSTOM. The guest's SELECT asks for a change (the host sees a ? by its name).
+ * The custom rows (UP/DOWN, LEFT/RIGHT or A to change, B back): attributes, best of, pips, HP and the toggles
+ * (RANDOM bags, FOG: their bag hidden, MIRROR: both bring the host's); any change makes the preset CUSTOM. The guest's SELECT asks for a change (the host sees a ? by its name).
  * The host's last rules are kept in its record (pl.rules) and come back the next time it hosts. */
 #pragma bank 255
 #include <gb/gb.h>
@@ -15,12 +15,14 @@
 #include "crucible_player.h"
 #define T_CREAM 7u
 #define T_BRASS 15u
-#define ROWS 13u
+#define ROWS 8u
 #define WIN 6u
 uint8_t lr_at, lr_top; /* the custom page's cursor and window (the harness reads them) */
 static const char PRESET[4][9] = {"FAIR", "STRENGTH", "CHAOS", "CUSTOM"};
-static const char LABEL[ROWS][9] = {"ATTRS",  "BEST OF", "PIPS", "HP",     "NO STACK", "PASSIVES", "GLITCH",
-                                    "RANDOM", "SUDDEN",  "FOG",  "MIRROR", "ARENA",    "BACK"};
+static const char LABEL[ROWS][9] = {
+    "ATTRS",  "BEST OF", "PIPS",   "HP",
+    "RANDOM", "FOG",     "MIRROR", "BACK"}; /* RANDOM bags, FOG their bag hidden, MIRROR both bring the host's bag */
+static const uint8_t BITS[3] = {3, 5, 6}; /* R3 bits of rows 4..6 */
 static const char ATTRS[3][7] = {"NORMAL", "CAPPED", "FULL"};
 static const uint8_t BEST[3] = {1, 3, 5}, PIPS[4] = {6, 4, 3, 2};
 static void put_(uint8_t x, uint8_t y, uint8_t tile, uint8_t attr) {
@@ -73,8 +75,8 @@ void lr_preset(uint8_t p) BANKED {
   } /* TRUE STRENGTH: FULL (the edge shown, off) */
   else if (p == 2u) {
     link_rules[1] = (uint8_t)(0x50u | 2u | (1u << 2));
-    link_rules[3] = 4u | 8u | 16u;
-  } /* CHAOS: CAPPED, glitch, random kits, sudden death */
+    link_rules[3] = 8u | 32u;
+  } /* CHAOS: CAPPED, random bags, in fog */
   else
     link_rules[1] = (uint8_t)((link_rules[1] & 0xfcu) | 3u);
 }
@@ -155,20 +157,8 @@ static void value_of(uint8_t r, char *v) {
   case 1: num_(v, BEST[((r1 >> 4) & 3u) < 3u ? (r1 >> 4) & 3u : 1u]); break;
   case 2: num_(v, PIPS[(r1 >> 6) & 3u]); break;
   case 3: num_(v, (uint8_t)(8u + ((link_rules[2] & 7u) << 1))); break;
-  case 5: strcpy(v, (r3 & 2u) ? "OFF" : "ON"); break;
-  case 11:
-    if (!link_rules[7])
-      strcpy(v, "ROOM");
-    else if (link_rules[7] <= 8u)
-      num_(v, link_rules[7]);
-    else
-      strcpy(v, "DREAM");
-    break;
-  case 12: break;
-  default: {
-    static const uint8_t BITS[11] = {0, 0, 0, 0, 0, 0, 2, 3, 4, 5, 6};
-    strcpy(v, (r3 & BIT8[BITS[r < 11u ? r : 0u]]) ? "ON" : "OFF");
-  }
+  case 7: break;
+  default: strcpy(v, (r3 & BIT8[BITS[(uint8_t)(r - 4u) < 3u ? r - 4u : 0u]]) ? "ON" : "OFF");
   }
 }
 void lr_page_draw(uint8_t row0) BANKED {
@@ -210,15 +200,8 @@ static void change(uint8_t r, uint8_t back) {
     v = (uint8_t)((v + (back ? 7u : 1u)) & 7u);
     link_rules[2] = (uint8_t)((link_rules[2] & 0xf8u) | v);
     break;
-  case 11:
-    v = link_rules[7];
-    v = back ? (uint8_t)(v ? v - 1u : 9u) : (uint8_t)(v < 9u ? v + 1u : 0u);
-    link_rules[7] = v;
-    break;
-  default: {
-    static const uint8_t BITS[11] = {0, 0, 0, 0, 0, 1, 2, 3, 4, 5, 6};
-    link_rules[3] ^= BIT8[BITS[r]];
-  }
+  default:
+    if ((uint8_t)(r - 4u) < 3u) link_rules[3] ^= BIT8[BITS[r - 4u]];
   }
   link_rules[1] = (uint8_t)((link_rules[1] & 0xfcu) | 3u); /* any change: CUSTOM */
 }

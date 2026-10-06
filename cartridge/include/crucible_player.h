@@ -14,7 +14,7 @@
 #define AV_OPTIONS 81u
 uint8_t player_row_count(uint8_t row) BANKED; /* options in a row (the tables live in the player's bank) */
 uint8_t player_row_base(uint8_t row) BANKED;
-/* attributes (8.3): GRIT +1 HP (cap 4), FOCUS +1 starting focus (cap 2), REACH +1 kit budget (cap 3) */
+/* attributes (8.3): GRIT +1 HP (cap 4), FOCUS +1 pip a turn (cap 2), REACH one more thing of three stars in the bag (cap 3) */
 #define PA_GRIT 0u
 #define PA_FOCUS 1u
 #define PA_REACH 2u
@@ -34,8 +34,8 @@ typedef struct {
   uint8_t unlock[11]; /* 81 option bits */
   uint8_t secret[2]; /* spared:3 | taken:3 << 3 | ai wins:2 << 6, flags */
   uint16_t known; /* passives known (12 bits) */
-  uint16_t kit[6]; /* the persistent kit (CRU_NONE: empty) */
-  uint8_t equip; /* two passive slots, 4 bits each (15: none) */
+  uint16_t kit[6]; /* the bag's six pins (CRU_NONE: the auto bag fills it) */
+  uint8_t equip; /* (was two passive slots; kept for the layout) */
   uint8_t nemesis[2]; /* the stance it was beaten with most, how (4 bits) | met */
   uint8_t rules[8]; /* the last match rules R0..R7 */
   /* the link record (9.3, 9.4): the last partner and this session's bounded traces */
@@ -70,10 +70,7 @@ uint8_t player_spend(uint8_t which) BANKED; /* one point into GRIT/FOCUS/REACH; 
 uint8_t player_unlocked(uint8_t option) BANKED;
 uint16_t player_bit(uint8_t k) BANKED; /* 1 << k for k < 16 (a table: sdcc and variable shifts disagree) */
 void player_unlock(uint8_t option) BANKED;
-uint8_t player_kit(uint16_t *kit) BANKED; /* the kit to fight with (owned, within budget; auto-kit otherwise) */
-void player_autokit(uint16_t *kit, uint8_t budget) BANKED;
 uint16_t player_owned_next(uint16_t id) BANKED; /* the next owned element on the shelf, any filter; wraps */
-uint8_t player_budget(void) BANKED;
 void player_genome_roll(uint8_t *g, uint16_t seed) BANKED; /* a face within the unlocked options (SELECT: dream it) */
 void player_chapter(uint8_t chapter, uint8_t cell) BANKED; /* the story moved: chapter counters, cell streak unlocks */
 #endif

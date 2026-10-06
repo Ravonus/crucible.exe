@@ -12,7 +12,6 @@
 #include <string.h>
 #include "crucible_state.h"
 #include "crucible_storyrun.h"
-#include "crucible_fight_rules.h"
 #include "crucible_player.h"
 #include "crucible_avatar.h"
 uint8_t cri_owned(crucible_core *c, uint16_t id) BANKED;
@@ -124,10 +123,10 @@ void player_defaults(uint32_t seed) BANKED {
   for (i = 0; i < sizeof START; i++) player_unlock(START[i]);
   pl.known = 0x000Bu; /* ECHO, PRISM, VIGIL */
   for (i = 0; i < 6u; i++) pl.kit[i] = CRU_NONE;
-  pl.equip = (uint8_t)(FP_ECHO | 0xF0u);
+  pl.equip = 0xFFu; /* (the passives' slots: unused since THE CRUCIBLE) */
   pl.rules[0] = 2u;
   pl.rules[1] = 0x50u;
-  pl.rules[2] = 2u; /* FAIR: FIGHT, NORMALISED, best of 3, 4 pips, HP 12 */
+  pl.rules[2] = 2u; /* FAIR: FIGHT, NORMALISED, best of 3, 4 pips, HP 12 (8 + 2 + GRIT 2) */
   player_genome_roll(pl.genome, (uint16_t)(seed ^ (seed >> 16)));
   pl.order = (uint8_t)(seed ^ (seed >> 8) ^ (seed >> 16) ^
                        (seed >> 24)); /* the level order's seed: two saves open different things first */
@@ -265,8 +264,6 @@ uint8_t player_spend(uint8_t w) BANKED {
   pl.pts--;
   return 1;
 }
-uint8_t player_budget(void) BANKED { return (uint8_t)(12u + player_attr(PA_REACH)); }
-
 /* ---- what you own, in shelf order (the core's owned bitmap scan; the filter in use is set aside) ---- */
 uint16_t player_owned_next(uint16_t id) BANKED {
   uint8_t f = core.filter;
@@ -276,86 +273,6 @@ uint16_t player_owned_next(uint16_t id) BANKED {
   core.filter = f;
   return r;
 }
-/* ---- the kit ---- */
-/* The balanced builder (section 2): two of each stance, preferring power 2, then 3, then 1; then fitted to the budget
- * by swapping the dearest card for the cheapest one that fits. One pass over what you own; deterministic. */
-static const uint8_t PREF[4] = {0, 1, 3, 2};
-void player_autokit(uint16_t *kit, uint8_t budget) BANKED {
-  uint16_t best[3][2], cheap = CRU_NONE, any = CRU_NONE, id;
-  uint8_t bp[3][2], s, m, p, k, i, j, c, top, cheap_c = 9u;
-  for (s = 0; s < 3u; s++) {
-    best[s][0] = best[s][1] = CRU_NONE;
-    bp[s][0] = bp[s][1] = 0;
-  }
-  uint16_t first = player_owned_next(0), n;
-  for (id = first, n = 0; id < core.items && n < core.items; n++, id = player_owned_next(id)) {
-    if (n && id == first) break;
-    if (any == CRU_NONE) any = id;
-    m = fr_stance(id);
-    p = fr_power(id);
-    c = (uint8_t)(p + ((m == 3u || m == 5u || m == 6u) ? 1u : 0u));
-    if (c < cheap_c) {
-      cheap_c = c;
-      cheap = id;
-    }
-    if (m != 1u && m != 2u && m != 4u) continue;
-    s = m == 1u ? 0u : m == 2u ? 1u : 2u;
-    if (PREF[p] > bp[s][0]) {
-      best[s][1] = best[s][0];
-      bp[s][1] = bp[s][0];
-      best[s][0] = id;
-      bp[s][0] = PREF[p];
-    } else if (PREF[p] > bp[s][1]) {
-      best[s][1] = id;
-      bp[s][1] = PREF[p];
-    }
-  }
-  for (k = 0; k < 6u; k++) {
-    s = (uint8_t)(k < 3u ? k : k - 3u);
-    kit[k] = best[s][k < 3u ? 0u : 1u];
-  }
-  for (k = 0; k < 6u; k++)
-    if (kit[k] == CRU_NONE) { /* a stance you have none of: something else you own, else a copy */
-      for (id = first, n = 0; id < core.items && n < core.items; n++, id = player_owned_next(id)) {
-        if (n && id == first) {
-          id = CRU_NONE;
-          break;
-        }
-        for (j = 0; j < 6u; j++)
-          if (kit[j] == id) break;
-        if (j == 6u) break;
-      }
-      if (id < core.items) {
-        kit[k] = id;
-        continue;
-      }
-      for (j = 0; j < 6u; j++)
-        if (kit[j] != CRU_NONE) break;
-      kit[k] = j < 6u ? kit[j] : any;
-    }
-  for (i = 0; i < 8u && fr_kit_cost(kit, 6) > budget; i++) { /* swap the dearest for the cheapest */
-    for (top = 0, k = 1; k < 6u; k++)
-      if (fr_cost(kit[k]) > fr_cost(kit[top])) top = k;
-    if (cheap == CRU_NONE || fr_cost(cheap) >= fr_cost(kit[top])) break;
-    kit[top] = cheap;
-  }
-}
-uint8_t player_kit(uint16_t *kit) BANKED {
-  uint8_t k, ok = 1, budget = player_budget();
-  uint16_t a[6];
-  for (k = 0; k < 6u; k++) {
-    kit[k] = pl.kit[k];
-    if (kit[k] >= core.items || !cri_owned(&core, kit[k])) ok = 0;
-  }
-  if (ok && fr_kit_cost(kit, 6) <= budget) return 1;
-  player_autokit(a, budget);
-  for (k = 0; k < 6u; k++)
-    if (kit[k] >= core.items || !cri_owned(&core, kit[k])) kit[k] = a[k]; /* keep what is still yours */
-  if (fr_kit_cost(kit, 6) > budget) memcpy(kit, a, sizeof a);
-  memcpy(pl.kit, kit, sizeof pl.kit); /* the fitted kit is the kit from now on */
-  return 0;
-}
-
 /* ---- the story's course ---- */
 /* a whole chapter in one alignment cell opens a style, silently: lawful good the radiant, chaotic evil the flame, true
  * neutral the cloud (8.4) */

@@ -10,8 +10,8 @@
 #define LS_PULL 3u /* the watcher: pulled in at its next safe point */
 #define LS_SHARED 4u /* both in the scene */
 #define LS_SOLO 5u /* given up: the owner plays alone */
-/* the setup: 0 seed; 1 faction | tier << 4 | memory << 8 | pip adjust (+2) << 12; 2..7 the owner's kit; 8..11 the
- * boss's hand; 12 passives | HP << 8; 13 focus | level << 8 */
+/* the setup (THE CRUCIBLE, crucible_fight_story.c): 0 seed; 1 faction | tier << 4 | nemesis << 8; 2..9 the owner's
+ * bag; 12 its size | the owner's HP << 8; 13 who opens | first contact << 1 | the boss's HP << 8 */
 #define LS_WORDS 14u
 extern uint8_t ls_role, ls_state, ls_beat, ls_active, ls_veto, ls_nudge, ls_their_hp, ls_quiet, ls_nudges;
 extern uint16_t ls_seed;

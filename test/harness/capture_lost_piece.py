@@ -141,6 +141,9 @@ class LostPieceRun:
 
     def goto(self, target: int, limit: int = 40) -> bool:
         for _ in range(limit):
+            # A random Story visitor's talk can open mid-walk in free play: leave it first.
+            if self.game.screen != Screen.BENCH:
+                self.to_bench()
             if self.core16(O_FOCUS) == target:
                 return True
             self.game.pulse("right")

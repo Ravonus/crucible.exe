@@ -226,7 +226,9 @@ uint8_t cru_story_advance(crucible_core *c, crucible_story *s) CORE_BANKED {
   uint8_t f, p;
   if (s->chapter < CRU_STORY_CHAPTERS) s->chapter++;
   p = cru_story_pressure(s);
-  cru_story_lucid(s, (int8_t)-(int8_t)(6u + (p << 2) > 100u ? 100u : 6u + (p << 2)));
+  cru_story_lucid(s, (int8_t)-(int8_t)(4u + (p << 1) > 100u
+                                           ? 100u
+                                           : 4u + (p << 1))); /* deeper costs less than it did (pacing, 2026-10-05) */
   for (f = 0; f < CRU_FACTIONS; f++) { /* grudges grow: the cold get colder */
     if (s->stand[f] < 0)
       shift(s, f, (int8_t)-(int8_t)(2u + (p >> 1)));

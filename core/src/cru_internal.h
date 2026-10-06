@@ -183,4 +183,6 @@ void cri_lost_settle(crucible_core *c) CORE_LOCAL;
 void cri_board_update(crucible_core *c) CORE_LOCAL;
 void cri_write(crucible_core *c) CORE_LOCAL;
 void cri_save(crucible_core *c) CORE_LOCAL;
+void cri_save_flush(crucible_core *c) CORE_LOCAL; /* a record still being written (cru_save_step) is finished first */
+void cri_save_begin(crucible_core *c, uint8_t commit) CORE_LOCAL;
 #endif

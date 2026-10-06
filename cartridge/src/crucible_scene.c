@@ -421,24 +421,78 @@ static void upload(const uint8_t *data, uint8_t count) {
 }
 /* The bench and reveal are the original baked room (the home room) until play has gone far enough for the living rooms
  * (crucible_room.c) to take over; every other screen is always baked. */
-void scene_draw(uint8_t id) BANKED {
-  const uint8_t *tiles = scene_tiles[id], *map = scene_map[id], *attr = scene_attr[id];
-  uint8_t y, x, row[32], at[32];
-  if (id < SCENE_BOOK && room_draw(id)) return;
-  room_leave();
-  upload(tiles, counts[id]);
-  /* map 0 marks a runtime hole (tile 0 belongs to object cells, never to a scene) */
-  for (y = 0; y < 18u; y++) {
-    for (x = 0; x < 32u; x++) {
-      row[x] = map[y * 32u + x] ? map[y * 32u + x] : 116u;
-      at[x] = attr[y * 32u + x];
-    }
-    VBK_REG = 1;
-    set_bkg_tiles(0, y, 32, 1, at);
-    VBK_REG = 0;
-    set_bkg_tiles(0, y, 32, 1, row);
+/* A scene in parts: scene_begin (tiles; a living room's setup), then scene_rows a few rows at a time (a VRAM row is
+ * about half a frame with the screen on), so a screen can build over frames instead of stalling; scene_draw does all of
+ * it at once. A baked scene drawn over the baked scene before it skips the tiles and rows they share (the bench and the
+ * reveal share rows 0..8 and 16, and 28 tiles). */
+static uint8_t sc_id, sc_y = 18u, sc_room, sc_prev = 0xffu, sc_skip[3];
+static void upload_diff(uint8_t id) {
+  const uint8_t *t = scene_tiles[id], *o = sc_prev < 5u ? scene_tiles[sc_prev] : 0;
+  uint8_t i, n = counts[id], on = sc_prev < 5u ? counts[sc_prev] : 0u;
+  for (i = 0; i < n; i++) {
+    if (o && i < on && !memcmp(t + (uint16_t)i * 16u, o + (uint16_t)i * 16u, 16)) continue;
+    VBK_REG = slot_bank(i);
+    set_bkg_data(slot_tile(i), 1, t + (uint16_t)i * 16u);
   }
+  VBK_REG = 0;
 }
+void scene_begin(uint8_t id) BANKED {
+  uint8_t y;
+  sc_id = id;
+  sc_y = 0;
+  sc_skip[0] = sc_skip[1] = sc_skip[2] = 0;
+  if (id < SCENE_BOOK && room_begin(id)) {
+    sc_room = 1;
+    sc_prev = 0xffu;
+    return;
+  }
+  sc_room = 0;
+  room_leave();
+  if (sc_prev < 5u && sc_prev != id)
+    for (y = 0; y < 18u; y++)
+      if (!memcmp(scene_map[id] + y * 32u, scene_map[sc_prev] + y * 32u, 32) &&
+          !memcmp(scene_attr[id] + y * 32u, scene_attr[sc_prev] + y * 32u, 32))
+        sc_skip[y >> 3] |= (uint8_t)(1u << (y & 7u));
+  upload_diff(id);
+  sc_prev = id;
+}
+/* up to n rows more (rows a baked scene shares with the one before are free); 1 while rows remain */
+uint8_t scene_rows(uint8_t n) BANKED {
+  const uint8_t *map = scene_map[sc_id], *attr = scene_attr[sc_id];
+  uint8_t x, row[32], at[32];
+  while (sc_y < 18u && n) {
+    if (sc_room)
+      room_row(sc_y);
+    else if (
+        !(sc_skip[sc_y >> 3] &
+          (uint8_t)(1u << (sc_y &
+                           7u)))) { /* map 0 marks a runtime hole (tile 0 belongs to object cells, never to a scene) */
+      for (x = 0; x < 32u; x++) {
+        row[x] = map[sc_y * 32u + x] ? map[sc_y * 32u + x] : 116u;
+        at[x] = attr[sc_y * 32u + x];
+      }
+      VBK_REG = 1;
+      set_bkg_tiles(0, sc_y, 32, 1, at);
+      VBK_REG = 0;
+      set_bkg_tiles(0, sc_y, 32, 1, row);
+    } else {
+      sc_y++;
+      continue;
+    }
+    sc_y++;
+    n--;
+  }
+  if (sc_y >= 18u && sc_room) {
+    sc_room = 0;
+    room_end(sc_id);
+  }
+  return sc_y < 18u;
+}
+void scene_draw(uint8_t id) BANKED {
+  sc_prev = 0xffu;
+  scene_begin(id);
+  (void)scene_rows(18u);
+} /* (all of it: no skipping, whatever was drawn before) */
 /* One map cell of a scene (tile and attribute), for runtime band rewrites such as drifting clouds. */
 void scene_cell(uint8_t id, uint8_t x, uint8_t y, uint8_t *tile, uint8_t *attr) BANKED {
   uint16_t at = (uint16_t)y * 32u + x;

@@ -31,7 +31,6 @@
 #include "crucible_time.h"
 #include "crucible_flow.h"
 #include "crucible_player.h"
-#include "crucible_fight_rules.h"
 #define T_CREAM 7u
 #define T_BRASS 15u
 #define LIFE 1200u /* frames a waiting hint stays (about twenty seconds on the bench) */
@@ -277,30 +276,9 @@ static void champion(uint8_t f) {
   if (!(pl.flags & PF_FIRST_DUEL)) flow_arg = (uint8_t)((flow_arg & 7u) | FIGHT_DUEL);
 }
 static void duelist(uint8_t f) { flow_arg = (uint8_t)((f < CRU_FACTIONS ? f : 0u) | FIGHT_DUEL); }
-/* no fight at all until a DREAM element is owned: the triangle closes with the first LIFE, PLANT or SNOW, so the first
- * fight comes when every matchup can be won (5.7). The flag is set the first time one is made or found at a load. */
+/* no fight until there is a bag to bring: eight things of your own beside the four (a story's first few makes) */
 static uint8_t dream_seen;
-static uint8_t can_fight(void) {
-  uint16_t id;
-  if (pl.flags & PF_FIRST_DUEL) return 1;
-  if (dream_seen == 2u) return 1;
-  if (core.mix.result < core.items && (fr_stance(core.mix.result) & 4u)) {
-    dream_seen = 2;
-    return 1;
-  }
-  if (!dream_seen) {
-    uint16_t first = player_owned_next(0), n;
-    dream_seen = 1;
-    for (id = first, n = 0; id < core.items && n < core.items; n++, id = player_owned_next(id)) {
-      if (n && id == first) break;
-      if (fr_stance(id) & 4u) {
-        dream_seen = 2;
-        return 1;
-      }
-    }
-  }
-  return 0;
-}
+static uint8_t can_fight(void) { return (pl.flags & PF_FIRST_DUEL) || core.found[0] >= 12u; }
 static uint8_t coldest(void) {
   crucible_story *s = talk_saga();
   uint8_t f, best = 0;
@@ -339,7 +317,7 @@ uint8_t flow_after_mix(uint8_t r) BANKED {
     }
     chap_seen = s->chapter;
   } /* a new chapter: its gatekeeper comes two makes later */
-  if (story_on && !can_fight() && r == STORY_BOSS) r = STORY_NONE; /* the first fight waits for a DREAM element */
+  if (story_on && !can_fight() && r == STORY_BOSS) r = STORY_NONE; /* the first fight waits for a bag */
   if (r == STORY_VISIT)
     owe = 1;
   else if (owe && r == STORY_NONE)
@@ -352,9 +330,11 @@ uint8_t flow_after_mix(uint8_t r) BANKED {
   if (story_on && beat != 0xffu) {
     if (beat)
       beat--;
-    else { /* the chapter beat: from chapter 2 a gatekeeper fights (a rival, else the coldest faction); before, a voice */
+    else { /* the chapter beat: from chapter 1 a gatekeeper fights (a rival, else the coldest faction); before, a voice.
+              * One that could not fight yet (no bag) is owed: it comes again at the next make */
+      if (s->chapter >= 1u && !can_fight()) return 0;
       beat = 0xffu;
-      if (s->chapter >= 2u && can_fight()) {
+      if (s->chapter >= 1u && can_fight()) {
         f = fight_rival();
         champion(f == 0xffu ? coldest() : f);
         if ((s->chapter == 4u || s->chapter >= 8u) && (pl.flags & PF_FIRST_DUEL)) {
@@ -374,6 +354,12 @@ uint8_t flow_after_mix(uint8_t r) BANKED {
       force_(FLOW_FIGHT);
     else
       wait_(FLOW_FIGHT);
+    return 0;
+  }
+  /* after the first duel the first champion follows (ten makes on): every run meets a boss early (pacing, 2026-10-05) */
+  if (story_on && (pl.flags & PF_FIRST_DUEL) && !s->nemesis.met && flow_fgap >= 10u) {
+    champion(coldest());
+    force_(FLOW_FIGHT);
     return 0;
   }
   /* the nemesis that fled comes back with what it took */
@@ -403,7 +389,7 @@ uint8_t flow_after_mix(uint8_t r) BANKED {
     uint8_t h = 0, w = 0xffu, k;
     for (k = 0; k < CRU_FACTIONS; k++) {
       if (s->stand[k] <= -50) h++;
-      if (s->stand[k] <= -15 && w == 0xffu) w = k;
+      if (s->stand[k] <= -8 && w == 0xffu) w = k;
     }
     if (w != 0xffu && roll() < (uint8_t)(16u + (h << 3))) {
       duelist(w);
@@ -486,6 +472,7 @@ uint8_t flow_tick(uint8_t screen, uint8_t *pressed) BANKED {
     time_done = sp_seen = flow_gauntlet = 0;
     beat = chap_seen = 0xffu;
     dream_seen = 0;
+    (void)dream_seen;
   } /* a run left or begun: nothing carries over (a co-op session keeps its encounters: they become shared, 9.4) */
   if (screen != 0u) {
     hide();

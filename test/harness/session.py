@@ -129,17 +129,18 @@ class Session:
         self.wait_for(Screen.MENU, limit, strict=strict)
         self.step(600)
 
-    def answer_asks(self) -> None:
-        """Right after a game start is chosen: a fresh cartridge asks the date and time, then the birthday (A keeps
-        what is shown), then the sign loader opens the game. A until the menu is gone."""
+    def answer_asks(self, *, until_bench: bool = False) -> None:
+        """Right after a game start is chosen: a game start may ask the date and time, then the birthday (A keeps
+        what is shown), then the sign loader opens the game. A until the menu is gone (or, with `until_bench`, until
+        the bench is up)."""
         self.step(30)
         for _ in range(ASK_PRESSES):
-            if self.screen != Screen.MENU:
+            if (self.screen == Screen.BENCH) if until_bench else (self.screen != Screen.MENU):
                 break
             self.pulse("a")
             self.step(40)
 
-    def start_free_play(self, limit: int = 3000, *, strict: bool = False) -> None:
+    def start_free_play(self, limit: int = 3000, *, strict: bool = False, until_bench: bool = False) -> None:
         """Power on, then PLAY -> FREE PLAY through the game start's asks, and let the bench settle."""
         self.power_on(limit, strict=strict)
         self.pulse("a")
@@ -147,7 +148,7 @@ class Session:
         self.pulse("down")
         self.step(180)
         self.pulse("a")
-        self.answer_asks()
+        self.answer_asks(until_bench=until_bench)
         self.wait_for(Screen.BENCH, limit, strict=strict)
         self.step(600)
 

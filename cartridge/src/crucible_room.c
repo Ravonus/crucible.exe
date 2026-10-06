@@ -313,8 +313,8 @@ static void whisper(void) {
   put_row(1, 17, 18, m, a);
 }
 /* ---- scene_draw's hooks ---- */
-uint8_t room_draw(uint8_t k) BANKED {
-  uint8_t y, m[32], a[32];
+/* in three parts, so a screen can draw its rows a few a frame (the reveal: crucible_scene.c scene_begin/scene_rows) */
+uint8_t room_begin(uint8_t k) BANKED {
   room_t old = cur;
   read_ctx();
   ev_pending = 0;
@@ -341,12 +341,16 @@ uint8_t room_draw(uint8_t k) BANKED {
   kind = (uint8_t)(k + 1u);
   if (!loaded || room_tiles_differ(&cur, &old)) load_all();
   sprites_up();
-  for (y = 0; y < 18u; y++) {
-    row_of(y, m, a);
-    memset(m + 20, ROOM_BLANK, 12);
-    memset(a + 20, 0, 12);
-    put_row(0, y, 32, m, a);
-  }
+  return 1;
+}
+void room_row(uint8_t y) BANKED {
+  uint8_t m[32], a[32];
+  row_of(y, m, a);
+  memset(m + 20, ROOM_BLANK, 12);
+  memset(a + 20, 0, 12);
+  put_row(0, y, 32, m, a);
+}
+void room_end(uint8_t k) BANKED {
   area_seen = ctx.area;
   amb = 0;
   amb_phase = 0;
@@ -357,6 +361,12 @@ uint8_t room_draw(uint8_t k) BANKED {
   crit_on = 0;
   vis = 0;
   hide();
+}
+uint8_t room_draw(uint8_t k) BANKED {
+  uint8_t y;
+  if (!room_begin(k)) return 0;
+  for (y = 0; y < 18u; y++) room_row(y);
+  room_end(k);
   return 1;
 }
 /* the door anomaly is showing: UP past the top is its (crucible_flow.c keeps a waiting talker out of the way) */
